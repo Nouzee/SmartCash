@@ -4,9 +4,12 @@
 
 1. Thousand 同时采集 `hktransaction` 与 `l2thousand`，保留 exchange event time、sequence/trade ID、active/passive broker。
 2. 用独立 tape 核验 `dir` 方向，未通过前不报告 broker net flow。
-3. 对 sequence gap、重复 trade ID、原始文件乱序、盘口 crossed/locked、staleness、active broker coverage 出日报；载入后排序不能抹掉原始质量证据。
-4. 记录 `complete_60s/complete_300s/sessionStart/replayed/coverage_complete/max_book_gap_seconds`，不得把 replay 标志或进程启动后的局部会话描述为当日全量。
-5. broker queue 独立保存，但不进入 trade/L2 replay。
+3. 对逐笔/L2 的 event time 与 callback arrival 分别检查缺失、负延迟、乱序和 staleness；另查 sequence gap、重复 trade ID、盘口 crossed/locked、active broker coverage。载入后排序不能抹掉原始质量证据。
+4. 调用方显式声明 expected universe；零事件股票也必须有失败行。逐笔完整性另由采集器的 subscription ACK、开收盘 heartbeat envelope 与 dropped callback 计数证明，不能由局部 sequence 连续推断。
+5. 完整日按冻结的 2025–2026 HKEX 开市/休市/半日市日历、香港 `+08:00` 时区和不超过 5 秒的活跃时段 L2 gap 验收，调用方只能收紧阈值。
+6. 记录 `complete_60s/complete_300s/sessionStart/replayed/coverage_complete/max_book_gap_seconds`，不得把 replay 标志或进程启动后的局部会话描述为当日全量。
+7. 只有 capture envelope、coverage 与独立 side verification 都通过的 session 才能生成因子和未来标签；其他输入只能生成质量报告。
+8. broker queue 独立保存，但不进入 trade/L2 replay。
 
 ## Phase 1 — 因子与标签
 

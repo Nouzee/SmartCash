@@ -1,8 +1,18 @@
+import argparse
 import json
+import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from smart_money.cli import load_events
+from smart_money.cli import (
+    _positive_milliseconds,
+    _prepare_output_dir,
+    load_events,
+    load_side_verification,
+    load_trade_capture_evidence,
+    main,
+)
 from smart_money.xtquant import DirectionConvention
 
 
@@ -14,6 +24,7 @@ def trade(seq: int, timestamp_ms: int, trade_id: str) -> dict[str, object]:
     return {
         "kind": "hktransaction",
         "symbol": "00700.HK",
+        "captured_at": datetime.fromtimestamp(timestamp_ms / 1_000, tz=timezone.utc).isoformat(),
         "payload": {
             "time": timestamp_ms,
             "price": 400.0,
@@ -37,7 +48,7 @@ def test_tape_audit_detects_file_order_duplicates_and_sequence_gaps(tmp_path) ->
         ],
     )
 
-    events, audit = load_events(path, DirectionConvention.VENDOR_DOC)
+    events, audit, _book_audit = load_events(path, DirectionConvention.VENDOR_DOC)
 
     assert [event.event_ts for event in events] == sorted(event.event_ts for event in events)
     assert audit.out_of_order_count == 1
@@ -54,3 +65,377 @@ def test_generic_tick_alias_is_rejected_instead_of_relabelled_as_xtquant(tmp_pat
 
     with pytest.raises(ValueError, match="unsupported event kind"):
         load_events(path, DirectionConvention.VENDOR_DOC)
+
+
+def test_crossed_book_is_counted_as_rejected_instead_of_disappearing(tmp_path) -> None:
+    path = tmp_path / "events.jsonl"
+    write_jsonl(
+        path,
+        [
+            trade(1, 1_767_576_601_000, "1"),
+            {
+                "kind": "l2thousand",
+                "symbol": "00700.HK",
+                "captured_at": "2026-01-05T09:30:01+08:00",
+                "payload": {
+                    "time": 1_767_576_601_000,
+                    "bidPrice": [400.2],
+                    "bidVolume": [10_000],
+                    "askPrice": [400.0],
+                    "askVolume": [8_000],
+                },
+            },
+        ],
+    )
+
+    events, _tape_audit, book_audit = load_events(path, DirectionConvention.VENDOR_DOC)
+
+    assert len(events) == 1
+    symbol_audit = book_audit.for_symbol("00700.HK")
+    assert symbol_audit is not None
+    assert symbol_audit.rejected_crossed_locked_count == 1
+    assert not symbol_audit.input_complete
+
+
+def test_real_replay_cli_writes_phase_zero_quality_report(tmp_path, monkeypatch) -> None:
+    events_path = tmp_path / "events.jsonl"
+    output_dir = tmp_path / "output"
+    rows = []
+    for sequence, timestamp_ms in ((1, 1_767_576_601_000), (2, 1_767_576_602_000)):
+        rows.extend(
+            (
+                trade(sequence, timestamp_ms, str(sequence)),
+                {
+                    "kind": "l2thousand",
+                    "symbol": "00700.HK",
+                    "captured_at": datetime.fromtimestamp(timestamp_ms / 1_000, tz=timezone.utc).isoformat(),
+                    "payload": {
+                        "time": timestamp_ms,
+                        "bidPrice": [399.8],
+                        "bidVolume": [10_000],
+                        "askPrice": [400.0],
+                        "askVolume": [8_000],
+                    },
+                },
+            )
+        )
+    write_jsonl(events_path, rows)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "smart-money",
+            "--events-jsonl",
+            str(events_path),
+            "--output-dir",
+            str(output_dir),
+            "--dataset-mode",
+            "historical_replay",
+            "--direction-convention",
+            DirectionConvention.VENDOR_DOC.value,
+            "--expected-open",
+            "2026-01-05T09:30:00+08:00",
+            "--session-start",
+            "2026-01-05T09:30:01+08:00",
+            "--expected-end",
+            "2026-01-05T16:00:00+08:00",
+            "--expected-symbol",
+            "00700.HK",
+            "--coverage-complete",
+            "--quality-only",
+        ],
+    )
+
+    main()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    quality = (output_dir / "data_quality_report.csv").read_text(encoding="utf-8")
+    assert manifest["capture_window_complete"] is False
+    assert manifest["coverage_complete"] is False
+    assert manifest["data_quality_rows"] == 1
+    assert "active_broker_disclosure_coverage" in quality
+    assert "00700.HK" in quality
+    assert not (output_dir / "feature_snapshots.csv").exists()
+
+
+def test_quality_only_reports_a_completely_absent_expected_symbol(tmp_path, monkeypatch) -> None:
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text("", encoding="utf-8")
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "smart-money",
+            "--events-jsonl", str(events_path),
+            "--output-dir", str(output_dir),
+            "--dataset-mode", "historical_replay",
+            "--direction-convention", DirectionConvention.VENDOR_DOC.value,
+            "--expected-open", "2026-01-05T09:30:00+08:00",
+            "--expected-end", "2026-01-05T16:00:00+08:00",
+            "--expected-symbol", "00939.HK",
+            "--session-start", "2026-01-05T09:30:00+08:00",
+            "--coverage-complete",
+            "--quality-only",
+        ],
+    )
+
+    main()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    quality = (output_dir / "data_quality_report.csv").read_text(encoding="utf-8")
+    assert manifest["events"] == 0
+    assert manifest["data_quality_rows"] == 1
+    assert manifest["coverage_complete"] is False
+    assert "00939.HK" in quality
+
+
+def test_factor_replay_requires_independent_side_verification(tmp_path, monkeypatch) -> None:
+    events_path = tmp_path / "events.jsonl"
+    output_dir = tmp_path / "output"
+    write_jsonl(
+        events_path,
+        [
+            trade(1, 1_767_576_601_000, "1"),
+            {
+                "kind": "l2thousand",
+                "symbol": "00700.HK",
+                "captured_at": "2026-01-05T09:30:01+08:00",
+                "payload": {
+                    "time": 1_767_576_601_000,
+                    "bidPrice": [399.8],
+                    "bidVolume": [10_000],
+                    "askPrice": [400.0],
+                    "askVolume": [8_000],
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "smart-money",
+            "--events-jsonl", str(events_path),
+            "--output-dir", str(output_dir),
+            "--dataset-mode", "historical_replay",
+            "--direction-convention", DirectionConvention.VENDOR_DOC.value,
+            "--expected-open", "2026-01-05T09:30:00+08:00",
+            "--expected-end", "2026-01-05T16:00:00+08:00",
+            "--expected-symbol", "00700.HK",
+            "--session-start", "2026-01-05T09:30:01+08:00",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="side verification"):
+        main()
+
+    assert (output_dir / "data_quality_report.csv").exists()
+    assert not (output_dir / "feature_snapshots.csv").exists()
+
+
+def test_factor_replay_rejects_incomplete_coverage_even_with_side_verification(
+    tmp_path, monkeypatch
+) -> None:
+    events_path = tmp_path / "events.jsonl"
+    output_dir = tmp_path / "output"
+    verification_path = tmp_path / "side-verification.json"
+    write_jsonl(
+        events_path,
+        [
+            trade(1, 1_767_576_601_000, "1"),
+            {
+                "kind": "l2thousand",
+                "symbol": "00700.HK",
+                "captured_at": "2026-01-05T09:30:01+08:00",
+                "payload": {
+                    "time": 1_767_576_601_000,
+                    "bidPrice": [399.8],
+                    "bidVolume": [10_000],
+                    "askPrice": [400.0],
+                    "askVolume": [8_000],
+                },
+            },
+        ],
+    )
+    verification_path.write_text(
+        json.dumps(
+            {
+                "verified": True,
+                "verified_at": "2026-01-05T16:10:00+08:00",
+                "direction_convention": DirectionConvention.VENDOR_DOC.value,
+                "evidence": "Independent exchange reconciliation",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "smart-money",
+            "--events-jsonl", str(events_path),
+            "--output-dir", str(output_dir),
+            "--dataset-mode", "historical_replay",
+            "--direction-convention", DirectionConvention.VENDOR_DOC.value,
+            "--expected-open", "2026-01-05T09:30:00+08:00",
+            "--expected-end", "2026-01-05T16:00:00+08:00",
+            "--expected-symbol", "00700.HK",
+            "--session-start", "2026-01-05T09:30:00+08:00",
+            "--side-verification-file", str(verification_path),
+            "--coverage-complete",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="coverage"):
+        main()
+
+    assert (output_dir / "data_quality_report.csv").exists()
+    assert not (output_dir / "feature_snapshots.csv").exists()
+
+
+def test_side_verification_artifact_must_match_the_selected_contract(tmp_path) -> None:
+    path = tmp_path / "side-verification.json"
+    path.write_text(
+        json.dumps(
+            {
+                "verified": True,
+                "verified_at": "2026-01-05T16:10:00+08:00",
+                "direction_convention": DirectionConvention.VENDOR_DOC.value,
+                "evidence": "Independent exchange-tape reconciliation report QA-2026-01-05",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    verification = load_side_verification(path, DirectionConvention.VENDOR_DOC)
+
+    assert verification["verified"] is True
+    with pytest.raises(ValueError, match="does not match"):
+        load_side_verification(path, DirectionConvention.THOUSAND_LEGACY)
+
+
+def test_trade_capture_evidence_requires_full_heartbeat_envelope(tmp_path) -> None:
+    path = tmp_path / "capture-evidence.json"
+    path.write_text(
+        json.dumps(
+            {
+                "source": "xtquant.hktransaction",
+                "trade_date": "2026-01-05",
+                "events_sha256": "a" * 64,
+                "symbols": {
+                    "00700.HK": {
+                        "subscription_acknowledged": True,
+                        "subscribed_at": "2026-01-05T09:29:59+08:00",
+                        "heartbeats": [
+                            "2026-01-05T09:30:00+08:00",
+                            "2026-01-05T09:31:01+08:00",
+                            "2026-01-05T16:00:00+08:00",
+                        ],
+                        "dropped_callback_count": 0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = load_trade_capture_evidence(
+        path,
+        expected_open=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
+        expected_end=datetime.fromisoformat("2026-01-05T16:00:00+08:00"),
+        expected_symbols=("00700.HK",),
+        events_sha256="a" * 64,
+    )
+
+    symbol_audit = audit.for_symbol("00700.HK")
+    assert symbol_audit is not None
+    assert symbol_audit.max_heartbeat_gap_seconds > 60.0
+    assert not symbol_audit.capture_complete
+
+
+def test_trade_capture_evidence_accepts_full_active_session_heartbeats(tmp_path) -> None:
+    path = tmp_path / "capture-evidence.json"
+    open_time = datetime.fromisoformat("2026-01-05T09:30:00+08:00")
+    end_time = open_time.replace(hour=16, minute=0)
+    offsets = (*range(0, 9_001, 60), *range(12_600, 23_401, 60))
+    heartbeats = [(open_time + timedelta(seconds=offset)).isoformat() for offset in offsets]
+    path.write_text(
+        json.dumps(
+            {
+                "source": "xtquant.hktransaction",
+                "trade_date": "2026-01-05",
+                "events_sha256": "b" * 64,
+                "symbols": {
+                    "00700.HK": {
+                        "subscription_acknowledged": True,
+                        "subscribed_at": "2026-01-05T09:29:59+08:00",
+                        "heartbeats": heartbeats,
+                        "dropped_callback_count": 0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = load_trade_capture_evidence(
+        path,
+        expected_open=open_time,
+        expected_end=end_time,
+        expected_symbols=("00700.HK",),
+        events_sha256="b" * 64,
+    )
+
+    symbol_audit = audit.for_symbol("00700.HK")
+    assert symbol_audit is not None
+    assert symbol_audit.max_heartbeat_gap_seconds == pytest.approx(60.0)
+    assert symbol_audit.capture_complete
+
+
+def test_snapshot_interval_must_be_strictly_positive() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="positive"):
+        _positive_milliseconds("0")
+
+
+def test_output_directory_must_not_mix_with_a_previous_run(tmp_path) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "feature_snapshots.csv").write_text("stale", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-empty"):
+        _prepare_output_dir(output_dir)
+
+
+def test_dropped_callback_count_must_be_a_nonnegative_json_integer(tmp_path) -> None:
+    path = tmp_path / "capture-evidence.json"
+    path.write_text(
+        json.dumps(
+            {
+                "source": "xtquant.hktransaction",
+                "trade_date": "2026-01-05",
+                "events_sha256": "c" * 64,
+                "symbols": {
+                    "00700.HK": {
+                        "subscription_acknowledged": True,
+                        "subscribed_at": "2026-01-05T09:29:59+08:00",
+                        "heartbeats": [
+                            "2026-01-05T09:30:00+08:00",
+                            "2026-01-05T16:00:00+08:00",
+                        ],
+                        "dropped_callback_count": 0.5,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="nonnegative JSON integer"):
+        load_trade_capture_evidence(
+            path,
+            expected_open=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
+            expected_end=datetime.fromisoformat("2026-01-05T16:00:00+08:00"),
+            expected_symbols=("00700.HK",),
+            events_sha256="c" * 64,
+        )

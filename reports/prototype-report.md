@@ -18,6 +18,8 @@ The prototype includes:
 - post-shock path reversal, signed-flow persistence and flow-decay diagnostics;
 - deterministic event replay and 10/30/60/300-second markout labels;
 - explicit 60/300-second warm-up, L2 gap validation and fixed-horizon endpoint tolerance;
+- per-symbol Phase 0 tape/L2/identity coverage reports for real replays;
+- a hard pre-feature gate requiring expected-universe completeness, callback provenance, the HKEX session calendar and independently verified trade direction;
 - synthetic and real-JSONL replay commands.
 
 ## Synthetic sanity result
@@ -47,6 +49,8 @@ The smaller eligible set now also requires a complete 300-second warm-up. The ta
 4. Snapshot-derived refill is only a proxy. True cancellation/addition requires `hkorder` or a reliable incremental order-book feed.
 5. Broker skill must be trained on earlier matured markouts with shrinkage and as-of versioning.
 6. Markout is not strategy PnL; execution cost, latency, market impact and fills remain absent.
+
+Phase 0 inventory on 2026-07-13 found no admissible persisted Hong Kong `hktransaction + l2thousand` dataset in the workspace. Thousand's default live period set also omits `l2thousand`; see [the data acceptance report](phase-00-data-acceptance-2026-07-13.md).
 
 ## Framework decision
 
