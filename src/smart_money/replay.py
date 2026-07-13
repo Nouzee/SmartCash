@@ -59,10 +59,16 @@ class MarkoutLabel:
 class MarkoutLabeler:
     """Offline-only future midpoint labels for frozen feature snapshots."""
 
-    def __init__(self, *, horizons_seconds: tuple[int, ...] = (10, 30, 60, 300)) -> None:
-        if not horizons_seconds or any(horizon <= 0 for horizon in horizons_seconds):
+    def __init__(
+        self,
+        *,
+        horizons_seconds: tuple[int, ...] = (10, 30, 60, 300),
+        max_lag_seconds: float = 2.0,
+    ) -> None:
+        if not horizons_seconds or any(horizon <= 0 for horizon in horizons_seconds) or max_lag_seconds < 0:
             raise ValueError("markout horizons must be positive")
         self.horizons_seconds = tuple(sorted(set(horizons_seconds)))
+        self.max_lag_seconds = max_lag_seconds
 
     def label(
         self,
@@ -77,7 +83,8 @@ class MarkoutLabeler:
         labels: list[MarkoutLabel] = []
         for horizon in self.horizons_seconds:
             target = feature.as_of + timedelta(seconds=horizon)
-            future = next((book for book in symbol_books if book.event_ts >= target), None)
+            latest = target + timedelta(seconds=self.max_lag_seconds)
+            future = next((book for book in symbol_books if target <= book.event_ts <= latest), None)
             if future is None:
                 continue
             future_mid = (future.bids[0].price + future.asks[0].price) / 2

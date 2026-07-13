@@ -66,6 +66,7 @@ def test_rolling_flow_uses_active_identity_and_excludes_neutral_direction() -> N
             expected_open=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
             session_start=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
             replayed=False,
+            coverage_complete=True,
         )
     )
     engine.ingest(
@@ -109,6 +110,7 @@ def test_late_live_session_cannot_be_trade_eligible() -> None:
             expected_open=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
             session_start=BASE,
             replayed=False,
+            coverage_complete=False,
         )
     )
     engine.ingest(
@@ -127,3 +129,51 @@ def test_late_live_session_cannot_be_trade_eligible() -> None:
     assert not feature.complete
     assert feature.confidence == 0
     assert not feature.trade_eligible
+
+
+def test_replay_flag_alone_does_not_prove_window_completeness() -> None:
+    engine = SmartMoneyEngine(identity_registry=registry())
+    engine.set_session(
+        SessionContext(
+            trade_date=BASE.date(),
+            expected_open=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
+            session_start=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
+            replayed=True,
+            coverage_complete=False,
+        )
+    )
+    engine.ingest(
+        BookSnapshotEvent(
+            symbol="00700.HK",
+            event_ts=BASE,
+            bids=(BookLevel(100.0, 300),),
+            asks=(BookLevel(100.1, 50),),
+            source="xtquant.l2thousand",
+        )
+    )
+
+    feature = engine.snapshot("00700.HK", BASE + timedelta(seconds=2))
+
+    assert not feature.complete
+    assert not feature.complete_60s
+    assert not feature.complete_300s
+
+
+def test_multiple_trades_with_the_same_vendor_timestamp_are_not_dropped() -> None:
+    engine = SmartMoneyEngine(identity_registry=registry())
+    engine.ingest(trade(1, 60_000, AggressorSide.BUY, "0101"))
+    engine.ingest(trade(1, 20_000, AggressorSide.SELL, "0102"))
+    engine.ingest(
+        BookSnapshotEvent(
+            symbol="00700.HK",
+            event_ts=BASE + timedelta(seconds=1),
+            bids=(BookLevel(100.0, 100),),
+            asks=(BookLevel(100.1, 100),),
+            source="xtquant.l2thousand",
+        )
+    )
+
+    flow = engine.snapshot("00700.HK", BASE + timedelta(seconds=1)).flow_10s
+
+    assert flow.buy_turnover == 60_000
+    assert flow.sell_turnover == 20_000

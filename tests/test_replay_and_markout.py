@@ -6,6 +6,7 @@ from smart_money.contracts import AggressorSide, BookLevel, BookSnapshotEvent, S
 from smart_money.engine import SmartMoneyEngine
 from smart_money.identity import IdentityRecord, IdentityRegistry
 from smart_money.replay import MarkoutLabeler, ReplayRunner
+from smart_money.reporting import feature_row
 
 
 BASE = datetime.fromisoformat("2026-01-05T09:30:00+08:00")
@@ -72,3 +73,24 @@ def test_markout_is_a_separate_future_label() -> None:
     assert label.direction == 1
     assert label.signed_markout == pytest.approx(label.raw_mid_return)
     assert label.label_ts == BASE + timedelta(seconds=12)
+
+    row = feature_row(feature, dataset_mode="historical_replay")
+    assert row["dataset_mode"] == "historical_replay"
+    assert row["complete_60s"] is False
+    assert row["complete_300s"] is False
+
+
+def test_markout_does_not_use_a_stale_book_as_a_fixed_horizon_label() -> None:
+    engine = SmartMoneyEngine()
+    engine.set_session(SessionContext(BASE.date(), BASE, BASE, True))
+    feature = ReplayRunner(engine).run(
+        [book(0, 100.0, 100.2), book(2, 100.1, 100.3, 200, 50)],
+        snapshot_times=(BASE + timedelta(seconds=2),),
+    )[0]
+
+    labels = MarkoutLabeler(horizons_seconds=(10,), max_lag_seconds=2).label(
+        feature,
+        [book(2, 100.1, 100.3), book(30, 100.4, 100.6)],
+    )
+
+    assert labels == ()

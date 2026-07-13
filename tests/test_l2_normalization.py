@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from smart_money.xtquant import normalize_l2thousand
 
 
@@ -19,3 +21,17 @@ def test_l2thousand_arrays_become_valid_full_snapshot() -> None:
     assert [(level.price, level.size) for level in book.bids] == [(400.0, 10_000), (399.8, 20_000)]
     assert [(level.price, level.size) for level in book.asks] == [(400.2, 8_000), (400.4, 15_000)]
     assert book.source == "xtquant.l2thousand"
+
+
+def test_l2thousand_rejects_mismatched_price_and_size_arrays() -> None:
+    with pytest.raises(ValueError, match="same length"):
+        normalize_l2thousand(
+            symbol="00700.HK",
+            raw={
+                "time": 1_767_576_601_000,
+                "bidPrice": [400.0, 399.8],
+                "bidVolume": [10_000],
+                "askPrice": [400.2],
+                "askVolume": [8_000],
+            },
+        )

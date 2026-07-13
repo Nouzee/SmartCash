@@ -4,15 +4,15 @@
 
 1. Thousand 同时采集 `hktransaction` 与 `l2thousand`，保留 exchange event time、sequence/trade ID、active/passive broker。
 2. 用独立 tape 核验 `dir` 方向，未通过前不报告 broker net flow。
-3. 对 event loss、重复、乱序、盘口 crossed/locked、staleness、active broker coverage 出日报。
-4. 记录 `complete/sessionStart/replayed`，不得把进程启动后的局部会话描述为当日全量。
+3. 对 sequence gap、重复 trade ID、原始文件乱序、盘口 crossed/locked、staleness、active broker coverage 出日报；载入后排序不能抹掉原始质量证据。
+4. 记录 `complete_60s/complete_300s/sessionStart/replayed/coverage_complete/max_book_gap_seconds`，不得把 replay 标志或进程启动后的局部会话描述为当日全量。
 5. broker queue 独立保存，但不进入 trade/L2 replay。
 
 ## Phase 1 — 因子与标签
 
 - 以 200ms/1s/5s 冻结 FeatureSnapshot；
 - 生成 10s/30s/60s/300s midpoint markout、MAE/MFE、spread capture；
-- shock 生成 persistent/dampened/reversed outcome；
+- shock 生成 persistent/dampened/reversed outcome，并记录 path reversal、signed-flow persistence、order-flow decay；
 - absorption candidate 单独评估，不预设正标签；
 - broker skill 只用已成熟历史 markout，按日滚动更新并加 shrinkage。
 

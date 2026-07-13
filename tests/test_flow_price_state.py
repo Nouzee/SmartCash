@@ -22,7 +22,8 @@ def engine() -> SmartMoneyEngine:
         )
     )
     result = SmartMoneyEngine(identity_registry=registry)
-    result.set_session(SessionContext(BASE.date(), BASE, BASE, True))
+    window_start = BASE - timedelta(seconds=300)
+    result.set_session(SessionContext(BASE.date(), window_start, window_start, True, True))
     return result
 
 

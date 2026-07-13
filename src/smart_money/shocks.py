@@ -52,6 +52,9 @@ class ShockOutcome:
     trend_ratio: float
     spread_widened: bool
     depth_depleted: bool
+    path_reversed: bool
+    signed_flow_persistence: float
+    order_flow_decay: float
     sustainable_price_discovery: bool
 
 
@@ -81,7 +84,7 @@ class ShockDetector:
             return None
         volatility = stdev(prior_returns)
         threshold = max(self.k * volatility, self.min_return_bps / 10_000)
-        if volatility <= 0 or abs(shock_return) <= threshold:
+        if abs(shock_return) <= threshold:
             return None
         prior = causal[-(self.min_history + 1) : -1]
         current = causal[-1]
@@ -102,19 +105,38 @@ class ShockDetector:
 class ShockLabeler:
     """Ex-post outcome labeler; never call from the realtime feature path."""
 
-    def __init__(self, *, horizon_seconds: int = 60, dampening_ratio: float = 0.5) -> None:
-        if horizon_seconds <= 0 or not 0 < dampening_ratio <= 1:
+    def __init__(
+        self,
+        *,
+        horizon_seconds: int = 60,
+        dampening_ratio: float = 0.5,
+        max_lag_seconds: float = 2.0,
+        flow_persistence_threshold: float = 0.6,
+        reversal_tolerance_bps: float = 2.0,
+    ) -> None:
+        if (
+            horizon_seconds <= 0
+            or not 0 < dampening_ratio <= 1
+            or max_lag_seconds < 0
+            or not 0 <= flow_persistence_threshold <= 1
+            or reversal_tolerance_bps < 0
+        ):
             raise ValueError("invalid shock label parameters")
         self.horizon_seconds = horizon_seconds
         self.dampening_ratio = dampening_ratio
+        self.max_lag_seconds = max_lag_seconds
+        self.flow_persistence_threshold = flow_persistence_threshold
+        self.reversal_tolerance_bps = reversal_tolerance_bps
 
     def label(self, event: ShockEvent, observations: Sequence[MicrostructureObservation]) -> ShockOutcome:
         target = event.detected_at + timedelta(seconds=self.horizon_seconds)
         ordered = sorted(observations, key=lambda item: item.event_ts)
         detection = next((item for item in ordered if item.event_ts == event.detected_at), None)
-        future = next((item for item in ordered if item.event_ts >= target), None)
+        latest = target + timedelta(seconds=self.max_lag_seconds)
+        future = next((item for item in ordered if target <= item.event_ts <= latest), None)
         if detection is None or future is None:
             raise ValueError("future window is not complete")
+        path = [item for item in ordered if event.detected_at < item.event_ts <= future.event_ts]
         post_return = future.mid_price / detection.mid_price - 1
         aligned = event.direction * post_return
         trend_ratio = abs(post_return) / abs(event.shock_return) if event.shock_return else 0.0
@@ -126,6 +148,19 @@ class ShockLabeler:
             category = ShockCategory.DAMPENED
         spread_widened = future.spread_bps > event.pre_spread_bps
         depth_depleted = future.depth_l1 < event.pre_depth_l1
+        path_reversed = any(
+            event.direction * (item.mid_price / detection.mid_price - 1) * 10_000 < -self.reversal_tolerance_bps
+            for item in path
+        )
+        signed_flow_persistence = (
+            sum(event.direction * item.signed_flow_ratio > 0 for item in path) / len(path)
+            if path
+            else 0.0
+        )
+        midpoint = max(1, len(path) // 2)
+        early_flow = fmean(abs(item.signed_flow_ratio) for item in path[:midpoint]) if path else 0.0
+        late_flow = fmean(abs(item.signed_flow_ratio) for item in path[midpoint:]) if path[midpoint:] else early_flow
+        order_flow_decay = max(0.0, min(1.0, 1.0 - late_flow / early_flow)) if early_flow else 0.0
         return ShockOutcome(
             category=category,
             labelled_at=future.event_ts,
@@ -133,7 +168,14 @@ class ShockLabeler:
             trend_ratio=trend_ratio,
             spread_widened=spread_widened,
             depth_depleted=depth_depleted,
+            path_reversed=path_reversed,
+            signed_flow_persistence=signed_flow_persistence,
+            order_flow_decay=order_flow_decay,
             sustainable_price_discovery=bool(
-                category is ShockCategory.PERSISTENT and spread_widened and depth_depleted
+                category is ShockCategory.PERSISTENT
+                and spread_widened
+                and depth_depleted
+                and not path_reversed
+                and signed_flow_persistence >= self.flow_persistence_threshold
             ),
         )

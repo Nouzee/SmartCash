@@ -57,13 +57,13 @@ class SmartMoneyEngine:
     def ingest(self, event: BookSnapshotEvent | TradeEvent) -> None:
         if isinstance(event, BookSnapshotEvent):
             books = self._books[event.symbol]
-            if books and event.event_ts <= books[-1].event_ts:
-                raise ValueError("book events must be strictly increasing per symbol")
+            if books and event.event_ts < books[-1].event_ts:
+                raise ValueError("book events must be non-decreasing per symbol")
             books.append(event)
         elif isinstance(event, TradeEvent):
             trades = self._trades[event.symbol]
-            if trades and event.event_ts <= trades[-1].event_ts:
-                raise ValueError("trade events must be strictly increasing per symbol")
+            if trades and event.event_ts < trades[-1].event_ts:
+                raise ValueError("trade events must be non-decreasing per symbol")
             trades.append(event)
 
     def _flow(self, symbol: str, as_of: datetime, seconds: int) -> FlowWindowFeatures:
@@ -152,10 +152,15 @@ class SmartMoneyEngine:
         flow_60s = self._flow(symbol, as_of, 60)
         flow_300s = self._flow(symbol, as_of, 300)
         session = self._sessions.get(as_of.date())
-        complete = bool(
+        session_coverage_ready = bool(
             session
+            and session.coverage_complete
             and (session.replayed or session.session_start <= session.expected_open + timedelta(minutes=1))
         )
+        elapsed_from_open = as_of - session.expected_open if session else timedelta(0)
+        complete_60s = session_coverage_ready and elapsed_from_open >= timedelta(seconds=60)
+        complete_300s = session_coverage_ready and elapsed_from_open >= timedelta(seconds=300)
+        complete = complete_300s
         mapping_confidence = min(flow_60s.broker_mapping_coverage, flow_60s.participant_mapping_coverage)
         freshness_seconds = max(0.0, (as_of - book.event_ts).total_seconds())
         freshness_confidence = max(0.0, 1.0 - freshness_seconds / 10.0)
@@ -243,6 +248,8 @@ class SmartMoneyEngine:
             smart_money_score=score,
             confidence=confidence,
             complete=complete,
+            complete_60s=complete_60s,
+            complete_300s=complete_300s,
             session_start=session.session_start if session else None,
             replayed=session.replayed if session else False,
             trade_eligible=bool(

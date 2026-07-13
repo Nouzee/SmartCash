@@ -15,7 +15,9 @@ The prototype includes:
 - confirmed/absorption/conflict/neutral flow-price states;
 - causal SmartMoneyScore and completeness/confidence gate;
 - ex-ante shock detection and ex-post persistent/dampened/reversed labels;
+- post-shock path reversal, signed-flow persistence and flow-decay diagnostics;
 - deterministic event replay and 10/30/60/300-second markout labels;
+- explicit 60/300-second warm-up, L2 gap validation and fixed-horizon endpoint tolerance;
 - synthetic and real-JSONL replay commands.
 
 ## Synthetic sanity result
@@ -30,12 +32,12 @@ For `trade_eligible` synthetic rows, mean signed midpoint markout was approximat
 
 | Horizon | Signals | Mean signed markout | Hit rate |
 | ---: | ---: | ---: | ---: |
-| 10s | 66 | 3.51 bp | 98.5% |
-| 30s | 66 | 10.11 bp | 97.0% |
-| 60s | 66 | 17.90 bp | 95.5% |
-| 300s | 66 | 62.71 bp | 86.4% |
+| 10s | 25 | 3.15 bp | 100.0% |
+| 30s | 25 | 9.44 bp | 100.0% |
+| 60s | 25 | 18.88 bp | 100.0% |
+| 300s | 25 | 94.40 bp | 100.0% |
 
-The table validates sign conventions, replay wiring and label separation only. The generator deliberately creates directional paths, so these values and hit rates are not evidence of alpha and must not be presented as real Hong Kong performance.
+The smaller eligible set now also requires a complete 300-second warm-up. The table validates sign conventions, replay wiring and label separation only. The generator deliberately creates directional paths, so these values and hit rates are not evidence of alpha and must not be presented as real Hong Kong performance.
 
 ## Most important empirical blockers
 

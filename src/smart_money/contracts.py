@@ -121,6 +121,8 @@ class FeatureSnapshot:
     smart_money_score: float
     confidence: float
     complete: bool
+    complete_60s: bool
+    complete_300s: bool
     session_start: datetime | None
     replayed: bool
     trade_eligible: bool
@@ -161,6 +163,7 @@ class SessionContext:
     expected_open: datetime
     session_start: datetime
     replayed: bool
+    coverage_complete: bool = False
 
     def __post_init__(self) -> None:
         if self.expected_open.tzinfo is None or self.session_start.tzinfo is None:

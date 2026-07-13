@@ -78,8 +78,10 @@ def _array(raw: Mapping[str, Any], *names: str) -> list[Any]:
 
 
 def _levels(prices: list[Any], sizes: list[Any]) -> tuple[BookLevel, ...]:
+    if len(prices) != len(sizes):
+        raise ValueError("L2 price and size arrays must have the same length")
     levels = []
-    for raw_price, raw_size in zip(prices, sizes, strict=False):
+    for raw_price, raw_size in zip(prices, sizes, strict=True):
         price = float(raw_price or 0)
         size = int(raw_size or 0)
         if price > 0:
