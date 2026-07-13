@@ -326,13 +326,17 @@ class SmartCashEngine:
     def step_snapshot(self, symbol: str, as_of: datetime) -> MicrostructureStepSnapshot:
         feature = self.snapshot(symbol, as_of)
         visible_books = [
-            book for book in self._books.get(symbol, ()) if book.captured_at <= as_of
+            book
+            for book in self._books.get(symbol, ())
+            if book.captured_at <= as_of and book.event_ts <= as_of
         ]
         if not visible_books:
             raise LookupError(f"no causally visible l2 book at or before {as_of.isoformat()} for {symbol}")
         book = max(visible_books, key=lambda candidate: (candidate.event_ts, candidate.captured_at))
         visible_trades = [
-            trade for trade in self._trades.get(symbol, ()) if trade.captured_at <= as_of
+            trade
+            for trade in self._trades.get(symbol, ())
+            if trade.captured_at <= as_of and trade.event_ts <= as_of
         ]
         trade = (
             max(visible_trades, key=lambda candidate: (candidate.event_ts, candidate.captured_at))
@@ -357,7 +361,7 @@ class SmartCashEngine:
             schema_version=SNAPSHOT_SCHEMA_VERSION,
             symbol=symbol,
             as_of=as_of,
-            decision_state=DecisionState(feature=feature),
+            decision_state=DecisionState(feature=feature, source_watermark=watermark),
             execution_state=execution_state,
             source_watermark=watermark,
             complete=feature.complete,

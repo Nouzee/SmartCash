@@ -14,6 +14,17 @@ class CandidateStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateCheckpoint:
+    checkpoint_at: datetime
+    gate_passed: bool
+    aligned_directional_trade: bool
+    fresh_book: bool
+    fresh_trade: bool
+    passed: bool
+    source_watermark: SourceWatermark
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateShock:
     candidate_id: str
     symbol: str
@@ -24,8 +35,19 @@ class CandidateShock:
     consecutive_passes: int
     last_checkpoint_at: datetime
     source_watermark: SourceWatermark
+    checkpoints: tuple[CandidateCheckpoint, ...] = ()
     confirmed_at: datetime | None = None
     expiry_reason: str = ""
+
+
+@dataclass(slots=True)
+class _SymbolLifecycle:
+    active_candidate_id: str | None = None
+    armed: bool = True
+    episode_open: bool = False
+    rearm_passes: int = 0
+    rearm_watermark: SourceWatermark | None = None
+    rearm_checkpoint_at: datetime | None = None
 
 
 class CandidateTracker:
@@ -37,12 +59,7 @@ class CandidateTracker:
         self.confirmation_passes = confirmation_passes
         self.observation_seconds = observation_seconds
         self._candidates: dict[str, CandidateShock] = {}
-        self._active_by_symbol: dict[str, str] = {}
-        self._armed_by_symbol: dict[str, bool] = {}
-        self._episode_open_by_symbol: dict[str, bool] = {}
-        self._rearm_passes: dict[str, int] = {}
-        self._rearm_watermark: dict[str, SourceWatermark] = {}
-        self._rearm_checkpoint_at: dict[str, datetime] = {}
+        self._symbol_lifecycle: dict[str, _SymbolLifecycle] = {}
         self._next_id = 1
 
     def detect(
@@ -59,9 +76,10 @@ class CandidateTracker:
             raise ValueError("candidate direction must be -1 or 1")
         if detected_at.tzinfo is None:
             raise ValueError("detected_at must be timezone-aware")
-        if symbol in self._active_by_symbol:
+        lifecycle = self._lifecycle(symbol)
+        if lifecycle.active_candidate_id is not None:
             raise ValueError(f"symbol already has an active candidate: {symbol}")
-        if not self._armed_by_symbol.get(symbol, True):
+        if not lifecycle.armed:
             raise ValueError(f"symbol is not re-armed: {symbol}")
         candidate_id = f"candidate-{self._next_id}"
         self._next_id += 1
@@ -77,8 +95,8 @@ class CandidateTracker:
             source_watermark=source_watermark,
         )
         self._candidates[candidate_id] = candidate
-        self._active_by_symbol[symbol] = candidate_id
-        self._armed_by_symbol[symbol] = False
+        lifecycle.active_candidate_id = candidate_id
+        lifecycle.armed = False
         return candidate
 
     def observe(
@@ -97,6 +115,8 @@ class CandidateTracker:
             raise ValueError("checkpoint_at must be timezone-aware")
         if checkpoint_at <= candidate.last_checkpoint_at:
             raise ValueError("candidate checkpoints must be strictly increasing")
+        if checkpoint_at - candidate.last_checkpoint_at < timedelta(seconds=1):
+            raise ValueError("candidate checkpoints must follow one-second cadence")
         if checkpoint_at > candidate.expires_at:
             expired = replace(
                 candidate,
@@ -118,6 +138,15 @@ class CandidateTracker:
             )
         )
         passed = gate_passed and aligned_directional_trade and fresh_book and fresh_trade
+        checkpoint = CandidateCheckpoint(
+            checkpoint_at=checkpoint_at,
+            gate_passed=gate_passed,
+            aligned_directional_trade=aligned_directional_trade,
+            fresh_book=fresh_book,
+            fresh_trade=fresh_trade,
+            passed=passed,
+            source_watermark=source_watermark,
+        )
         consecutive_passes = candidate.consecutive_passes + 1 if passed else 0
         status = (
             CandidateStatus.CONFIRMED
@@ -130,6 +159,7 @@ class CandidateTracker:
             consecutive_passes=consecutive_passes,
             last_checkpoint_at=checkpoint_at,
             source_watermark=source_watermark,
+            checkpoints=candidate.checkpoints + (checkpoint,),
             confirmed_at=checkpoint_at if status is CandidateStatus.CONFIRMED else None,
         )
         if status is CandidateStatus.CONFIRMED:
@@ -146,21 +176,21 @@ class CandidateTracker:
         abnormal: bool,
         source_watermark: SourceWatermark,
     ) -> bool:
-        if symbol in self._active_by_symbol or self._episode_open_by_symbol.get(symbol, False):
+        lifecycle = self._lifecycle(symbol)
+        if lifecycle.active_candidate_id is not None or lifecycle.episode_open:
             raise ValueError(f"symbol cannot re-arm while a candidate or episode is active: {symbol}")
-        if self._armed_by_symbol.get(symbol, True):
+        if lifecycle.armed:
             return True
-        previous_checkpoint = self._rearm_checkpoint_at.get(symbol)
+        previous_checkpoint = lifecycle.rearm_checkpoint_at
         if previous_checkpoint is not None and checkpoint_at <= previous_checkpoint:
             raise ValueError("re-arm checkpoints must be strictly increasing")
-        previous = self._rearm_watermark.get(symbol)
+        previous = lifecycle.rearm_watermark
         fresh = previous is None or _watermark_advanced(previous, source_watermark)
-        passes = self._rearm_passes.get(symbol, 0) + 1 if fresh and not abnormal else 0
-        self._rearm_passes[symbol] = passes
-        self._rearm_watermark[symbol] = source_watermark
-        self._rearm_checkpoint_at[symbol] = checkpoint_at
-        if passes >= 2:
-            self._armed_by_symbol[symbol] = True
+        lifecycle.rearm_passes = lifecycle.rearm_passes + 1 if fresh and not abnormal else 0
+        lifecycle.rearm_watermark = source_watermark
+        lifecycle.rearm_checkpoint_at = checkpoint_at
+        if lifecycle.rearm_passes >= 2:
+            lifecycle.armed = True
             return True
         return False
 
@@ -174,21 +204,26 @@ class CandidateTracker:
         candidate = self._candidates[candidate_id]
         if candidate.status is not CandidateStatus.CONFIRMED:
             raise ValueError("only a confirmed candidate can own a trade episode")
-        if not self._episode_open_by_symbol.get(candidate.symbol, False):
+        lifecycle = self._lifecycle(candidate.symbol)
+        if not lifecycle.episode_open:
             raise ValueError("candidate trade episode is not open")
-        self._episode_open_by_symbol[candidate.symbol] = False
-        self._rearm_passes[candidate.symbol] = 0
-        self._rearm_watermark[candidate.symbol] = source_watermark
-        self._rearm_checkpoint_at[candidate.symbol] = ended_at
+        lifecycle.episode_open = False
+        lifecycle.rearm_passes = 0
+        lifecycle.rearm_watermark = source_watermark
+        lifecycle.rearm_checkpoint_at = ended_at
 
     def _store_terminal(self, candidate: CandidateShock, *, episode_open: bool) -> None:
         self._candidates[candidate.candidate_id] = candidate
-        self._active_by_symbol.pop(candidate.symbol, None)
-        self._armed_by_symbol[candidate.symbol] = False
-        self._episode_open_by_symbol[candidate.symbol] = episode_open
-        self._rearm_passes[candidate.symbol] = 0
-        self._rearm_watermark[candidate.symbol] = candidate.source_watermark
-        self._rearm_checkpoint_at[candidate.symbol] = candidate.last_checkpoint_at
+        lifecycle = self._lifecycle(candidate.symbol)
+        lifecycle.active_candidate_id = None
+        lifecycle.armed = False
+        lifecycle.episode_open = episode_open
+        lifecycle.rearm_passes = 0
+        lifecycle.rearm_watermark = candidate.source_watermark
+        lifecycle.rearm_checkpoint_at = candidate.last_checkpoint_at
+
+    def _lifecycle(self, symbol: str) -> _SymbolLifecycle:
+        return self._symbol_lifecycle.setdefault(symbol, _SymbolLifecycle())
 
 
 def _watermark_advanced(previous: SourceWatermark, current: SourceWatermark) -> bool:

@@ -144,6 +144,7 @@ class FeatureSnapshot:
 @dataclass(frozen=True, slots=True)
 class DecisionState:
     feature: FeatureSnapshot
+    source_watermark: "SourceWatermark"
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +200,22 @@ class MicrostructureStepSnapshot:
             raise ValueError("decision state symbol must match snapshot symbol")
         if self.decision_state.feature.as_of != self.as_of:
             raise ValueError("decision state as_of must match snapshot as_of")
+        if self.decision_state.source_watermark != self.source_watermark:
+            raise ValueError("decision and snapshot source watermarks must match")
+        if (
+            self.execution_state.book_event_ts != self.source_watermark.book_event_ts
+            or self.execution_state.book_captured_at != self.source_watermark.book_captured_at
+        ):
+            raise ValueError("execution book and snapshot source watermark must match")
+        last_trade = self.execution_state.last_trade
+        if last_trade is None and self.source_watermark.trade_event_ts is not None:
+            raise ValueError("execution trade and snapshot source watermark must match")
+        if last_trade is not None and (
+            last_trade.event_ts != self.source_watermark.trade_event_ts
+            or last_trade.captured_at != self.source_watermark.trade_captured_at
+            or last_trade.trade_id != self.source_watermark.trade_id
+        ):
+            raise ValueError("execution trade and snapshot source watermark must match")
         if self.execution_state.book_captured_at > self.as_of:
             raise ValueError("execution state cannot contain a future-arriving book")
         if (

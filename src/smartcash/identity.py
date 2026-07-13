@@ -27,12 +27,16 @@ class IdentityRecord:
     skill_score: float
     effective_from: date
     effective_to: date | None = None
+    mapping_source: str = "unspecified"
+    mapping_version: str = "unspecified"
 
     def __post_init__(self) -> None:
         if not self.seat_code:
             raise ValueError("seat_code is required")
         if not self.broker_entity_id:
             raise ValueError("broker_entity_id is required")
+        if not self.mapping_source or not self.mapping_version:
+            raise ValueError("identity mapping provenance is required")
         if not -1 <= self.skill_score <= 1:
             raise ValueError("skill_score must be within [-1, 1]")
         if self.effective_to is not None and self.effective_to < self.effective_from:

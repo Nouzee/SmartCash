@@ -3,7 +3,8 @@
 SmartCash 是一个独立的港股方向性高频“聪明钱”研究项目。核心不是 CCASS 或 Hitchhike 日频信号，而是：
 
 ```text
-hktransaction + l2thousand + independent seat/broker-entity as-of mapping
+Vault dataset → Beast canonical hktransaction/l2thousand transform
+             + independent seat/broker-entity as-of mapping
                          ↓
 事件时间规范化与因果状态机
                          ↓
@@ -33,6 +34,7 @@ Gomber 等人的 *Don’t Stop Me Now!* 研究已经触发的 Xetra volatility i
 ## 数据事实边界
 
 - `hktransaction` 是唯一成交方向与成交金额来源。
+- 历史/研究数据从冻结的 Vault dataset 读取，由 Beast 脚本生成 SmartCash 规范事件；manifest 必须绑定 Vault dataset/version/hash、Beast commit/config hash 与 artifact hash。
 - 方向流使用 `activeBrokerNo`；被动 `brokerNo` 仅留作审计，缺失 active broker 时不会回退。
 - raw `dir` 必须显式选择解释契约。厂商文档口径是 `1=主动卖、2=主动买`；Thousand 当前 legacy exporter 与其相反，真实研究前必须用独立 tape 核验。
 - `l2thousand` 是盘口来源。
@@ -144,6 +146,7 @@ src/smartcash/
   replay.py      # event-time replay 与未来 markout
   walk_forward.py # 60/1/20/1/20 date-aligned folds
   integrations/  # Lemnis 公共订单桥与 Parquet snapshot sidecar
+                 # Vault → Beast artifact 血缘契约
   reporting.py   # 显式 dataset mode 的 CSV/诊断输出
   data_quality.py # Phase 0 逐标的 tape/L2/身份覆盖验收
   cli.py         # 真实 JSONL replay
@@ -220,7 +223,9 @@ cd /home/zrliu/smartcash
 
 ## 与现有项目的关系
 
-- **Thousand**：数据采集与持久化。需要补齐 `l2thousand` 历史落盘，并修复/核验 side contract。
+- **Vault**：SmartCash 历史/研究数据的权威版本源；实际 mount/API 由运行环境配置。
+- **Beast**：负责从 Vault 生成保留 `event_ts/captured_at` 的规范事件 artifact；处理脚本留在 Beast 所属仓库，SmartCash 只校验 manifest 和消费结果。
+- **Thousand**：可承担实时采集或运维展示，但不是 SmartCash 默认历史研究数据 API，也不拥有因子语义。
 - **Lemnis**：SmartCash 已能输出哈希绑定的 1s/5s dual-plane Parquet sidecar，并把 Protected IOC intent 转成 Lemnis 公共订单 batch；L2 逐档成交仍由 SmartCash 负责，Lemnis 用于订单生命周期、风险、账本和 replay。当前本机 Lemnis 缺少其声明的 `polars` 依赖，公共对象物化尚未完成环境验收。
 - **Hephaestus**：用于 Research Ledger、假设注册、成本/markout 审计、DecisionEngine 和 dossier；不采用其现有 queue simulator 作为成交真值。
 

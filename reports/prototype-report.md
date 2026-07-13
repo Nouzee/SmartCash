@@ -1,10 +1,10 @@
-# Smart Money Microstructure Prototype Report
+# SmartCash Microstructure Prototype Report
 
 Date: 2026-07-13
 
 ## Outcome
 
-An independent high-frequency research project now exists at `/home/zrliu/smartcash`. It is event-driven, uses XTQuant `hktransaction` plus `l2thousand`, and keeps realtime features separate from future outcomes.
+An independent high-frequency research project now exists at `/home/zrliu/smartcash`. It is event-driven, consumes Vault data transformed by Beast into canonical XTQuant `hktransaction` plus `l2thousand`, and keeps realtime features separate from future outcomes.
 
 The prototype includes:
 
@@ -22,6 +22,7 @@ The prototype includes:
 - taker-only price-protected IOC fills against the first eligible new L2 snapshot;
 - date-aligned 60/1/20/1/20 walk-forward fold construction;
 - versioned Lemnis public-order payloads and hash-bound 1s/5s Parquet sidecars;
+- a fail-closed Vault dataset / Beast transform lineage manifest contract;
 - explicit 60/300-second warm-up, L2 gap validation and fixed-horizon endpoint tolerance;
 - per-symbol Phase 0 tape/L2/identity coverage reports for real replays;
 - a hard pre-feature gate requiring expected-universe completeness, callback provenance, the HKEX session calendar and independently verified trade direction;
@@ -59,7 +60,8 @@ Phase 0 inventory on 2026-07-13 found no admissible persisted Hong Kong `hktrans
 
 ## Framework decision
 
-- Thousand is the acquisition and immutable-event source.
+- Vault is the authoritative versioned research-data source; a concrete environment mount/API still needs to be supplied.
+- Beast owns the reproducible Vault-to-SmartCash transform scripts. SmartCash now validates their dataset/script/config/artifact lineage contract rather than importing Beast internals.
 - This project is the tick/L2 feature and label layer.
 - SmartCash now writes versioned, hash-bound dual-plane Parquet sidecars and public Lemnis order-batch payloads. Lemnis may provide scheduling, order lifecycle, risk, ledger and replay, while SmartCash remains the L2 execution authority. Local public-object materialization is not yet environment-verified because the Lemnis checkout's declared `polars` dependency is absent.
 - Hephaestus can provide assumption/evidence registries, decision gates and reports. Its queue simulator and learned regimes are not validation truth.

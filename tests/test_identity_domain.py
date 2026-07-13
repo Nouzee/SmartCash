@@ -24,6 +24,8 @@ def test_ccass_identifier_is_an_external_alias_not_a_canonical_key() -> None:
         ),
         skill_score=0.8,
         effective_from=date(2020, 1, 1),
+        mapping_source="vault.beast.identity",
+        mapping_version="mapping-v3",
     )
     registry = IdentityRegistry((record,))
 
@@ -32,6 +34,7 @@ def test_ccass_identifier_is_an_external_alias_not_a_canonical_key() -> None:
     assert resolved == record
     assert resolved.broker_entity_id == "broker-alpha"
     assert resolved.external_aliases[0].value == "P001"
+    assert resolved.mapping_source == "vault.beast.identity"
     assert registry.resolve_seat("P001", date(2026, 1, 5)) is None
 
 

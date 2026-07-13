@@ -26,8 +26,10 @@ class IocExecutionStatus(StrEnum):
     UNFILLED_PRICE_PROTECTION = "unfilled_price_protection"
     UNFILLED_CAPACITY = "unfilled_capacity"
     WAITING_FOR_NEW_BOOK = "waiting_for_new_book"
+    WAITING_FOR_QUALITY_BOOK = "waiting_for_quality_book"
     EXPIRED = "expired"
     INVALID_POINT_IN_TIME_RULES = "invalid_point_in_time_rules"
+    ALREADY_TERMINAL = "already_terminal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,7 @@ class PointInTimeInstrumentRules:
     effective_at: datetime
     board_lot: int
     tick_size: float
+    effective_to: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.symbol:
@@ -46,6 +49,23 @@ class PointInTimeInstrumentRules:
             raise ValueError("board_lot must be positive")
         if not isfinite(self.tick_size) or self.tick_size <= 0:
             raise ValueError("tick_size must be finite and positive")
+        if self.effective_to is not None:
+            if self.effective_to.tzinfo is None:
+                raise ValueError("effective_to must be timezone-aware")
+            if self.effective_to < self.effective_at:
+                raise ValueError("effective_to must not precede effective_at")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionCapacity:
+    available_cash_hkd: float
+    sellable_quantity: int
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.available_cash_hkd) or self.available_cash_hkd < 0:
+            raise ValueError("available_cash_hkd must be finite and non-negative")
+        if self.sellable_quantity < 0:
+            raise ValueError("sellable_quantity must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +82,7 @@ class ProtectedIocOrder:
     max_ticks_beyond_best: int = 2
     visible_participation: float = 0.02
     max_levels: int = 5
+    target_notional_hkd: float = 50_000.0
 
     def __post_init__(self) -> None:
         if not self.order_id or not self.symbol:
@@ -82,6 +103,8 @@ class ProtectedIocOrder:
             raise ValueError("visible_participation must be in (0, 1]")
         if not 1 <= self.max_levels <= 5:
             raise ValueError("max_levels must be between 1 and 5")
+        if not isfinite(self.target_notional_hkd) or self.target_notional_hkd <= 0:
+            raise ValueError("target_notional_hkd must be finite and positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,47 +131,81 @@ class IocExecutionResult:
     fills: tuple[IocFill, ...]
     execution_book_event_ts: datetime | None
     execution_book_captured_at: datetime | None
+    capacity_notional_hkd: float | None
+    capacity_quantity: int | None
 
 
 class ProtectedIocExecutor:
     """Sweep up to five displayed levels with explicit price/capacity guards."""
+
+    def __init__(self) -> None:
+        self._terminal_order_ids: set[str] = set()
 
     def execute(
         self,
         order: ProtectedIocOrder,
         step: MicrostructureStepSnapshot,
         rules: PointInTimeInstrumentRules,
+        capacity: ExecutionCapacity,
     ) -> IocExecutionResult:
         if order.symbol != step.symbol or order.symbol != rules.symbol:
             raise ValueError("order, snapshot, and instrument-rule symbols must match")
-        if rules.effective_at > order.decision_time:
-            return self._empty(order, IocExecutionStatus.INVALID_POINT_IN_TIME_RULES)
+        if order.order_id in self._terminal_order_ids:
+            return self._empty(order, IocExecutionStatus.ALREADY_TERMINAL)
+        if rules.effective_at > order.decision_time or (
+            rules.effective_to is not None and order.decision_time > rules.effective_to
+        ):
+            return self._terminal(
+                self._empty(order, IocExecutionStatus.INVALID_POINT_IN_TIME_RULES)
+            )
         if step.as_of > order.expires_at:
-            return self._empty(
-                order,
-                IocExecutionStatus.EXPIRED,
-                cancelled_quantity=order.quantity,
+            return self._terminal(
+                self._empty(
+                    order,
+                    IocExecutionStatus.EXPIRED,
+                    cancelled_quantity=order.quantity,
+                )
             )
 
         execution = step.execution_state
         if execution.book_captured_at < order.eligible_from:
             return self._empty(order, IocExecutionStatus.WAITING_FOR_NEW_BOOK)
+        if not step.complete:
+            return self._empty(order, IocExecutionStatus.WAITING_FOR_QUALITY_BOOK)
 
         levels = execution.asks if order.side is OrderSide.BUY else execution.bids
         levels = levels[: order.max_levels]
         price_limit = self._price_limit(order, levels[0], rules)
-        visible_quantity = sum(level.size for level in levels)
-        participation_cap = int(visible_quantity * order.visible_participation)
-        executable_quantity = min(order.quantity, participation_cap)
+        visible_notional = sum(level.price * level.size for level in levels)
+        capacity_notional = min(
+            order.target_notional_hkd,
+            visible_notional * order.visible_participation,
+        )
+        if order.side is OrderSide.BUY:
+            capacity_notional = min(capacity_notional, capacity.available_cash_hkd)
+            portfolio_quantity = order.quantity
+        else:
+            portfolio_quantity = capacity.sellable_quantity
+        notional_quantity = int(capacity_notional / levels[0].price)
+        executable_quantity = min(order.quantity, notional_quantity, portfolio_quantity)
         executable_quantity -= executable_quantity % rules.board_lot
+        while (
+            executable_quantity > 0
+            and self._displayed_notional(levels, executable_quantity) > capacity_notional
+        ):
+            executable_quantity -= rules.board_lot
         if executable_quantity <= 0:
-            return self._empty(
-                order,
-                IocExecutionStatus.UNFILLED_CAPACITY,
-                cancelled_quantity=order.quantity,
-                price_limit=price_limit,
-                book_event_ts=execution.book_event_ts,
-                book_captured_at=execution.book_captured_at,
+            return self._terminal(
+                self._empty(
+                    order,
+                    IocExecutionStatus.UNFILLED_CAPACITY,
+                    cancelled_quantity=order.quantity,
+                    price_limit=price_limit,
+                    book_event_ts=execution.book_event_ts,
+                    book_captured_at=execution.book_captured_at,
+                    capacity_notional_hkd=capacity_notional,
+                    capacity_quantity=executable_quantity,
+                )
             )
 
         remaining = executable_quantity
@@ -157,7 +214,6 @@ class ProtectedIocExecutor:
             if not self._within_price_limit(order.side, level.price, price_limit):
                 break
             fill_quantity = min(remaining, level.size)
-            fill_quantity -= fill_quantity % rules.board_lot
             if fill_quantity <= 0:
                 continue
             fills.append(
@@ -178,13 +234,17 @@ class ProtectedIocExecutor:
 
         filled_quantity = sum(fill.quantity for fill in fills)
         if filled_quantity == 0:
-            return self._empty(
-                order,
-                IocExecutionStatus.UNFILLED_PRICE_PROTECTION,
-                cancelled_quantity=order.quantity,
-                price_limit=price_limit,
-                book_event_ts=execution.book_event_ts,
-                book_captured_at=execution.book_captured_at,
+            return self._terminal(
+                self._empty(
+                    order,
+                    IocExecutionStatus.UNFILLED_PRICE_PROTECTION,
+                    cancelled_quantity=order.quantity,
+                    price_limit=price_limit,
+                    book_event_ts=execution.book_event_ts,
+                    book_captured_at=execution.book_captured_at,
+                    capacity_notional_hkd=capacity_notional,
+                    capacity_quantity=executable_quantity,
+                )
             )
 
         vwap = sum(fill.quantity * fill.price for fill in fills) / filled_quantity
@@ -193,18 +253,26 @@ class ProtectedIocExecutor:
             if filled_quantity == order.quantity
             else IocExecutionStatus.PARTIALLY_FILLED
         )
-        return IocExecutionResult(
-            order_id=order.order_id,
-            status=status,
-            requested_quantity=order.quantity,
-            filled_quantity=filled_quantity,
-            cancelled_quantity=order.quantity - filled_quantity,
-            vwap=vwap,
-            price_limit=price_limit,
-            fills=tuple(fills),
-            execution_book_event_ts=execution.book_event_ts,
-            execution_book_captured_at=execution.book_captured_at,
+        return self._terminal(
+            IocExecutionResult(
+                order_id=order.order_id,
+                status=status,
+                requested_quantity=order.quantity,
+                filled_quantity=filled_quantity,
+                cancelled_quantity=order.quantity - filled_quantity,
+                vwap=vwap,
+                price_limit=price_limit,
+                fills=tuple(fills),
+                execution_book_event_ts=execution.book_event_ts,
+                execution_book_captured_at=execution.book_captured_at,
+                capacity_notional_hkd=capacity_notional,
+                capacity_quantity=executable_quantity,
+            )
         )
+
+    def _terminal(self, result: IocExecutionResult) -> IocExecutionResult:
+        self._terminal_order_ids.add(result.order_id)
+        return result
 
     @staticmethod
     def _price_limit(
@@ -229,6 +297,18 @@ class ProtectedIocExecutor:
         return price_decimal <= limit_decimal if side is OrderSide.BUY else price_decimal >= limit_decimal
 
     @staticmethod
+    def _displayed_notional(levels: tuple[BookLevel, ...], quantity: int) -> float:
+        remaining = quantity
+        notional = Decimal(0)
+        for level in levels:
+            level_quantity = min(remaining, level.size)
+            notional += Decimal(level_quantity) * Decimal(str(level.price))
+            remaining -= level_quantity
+            if remaining == 0:
+                break
+        return float(notional) if remaining == 0 else float("inf")
+
+    @staticmethod
     def _empty(
         order: ProtectedIocOrder,
         status: IocExecutionStatus,
@@ -237,6 +317,8 @@ class ProtectedIocExecutor:
         price_limit: float | None = None,
         book_event_ts: datetime | None = None,
         book_captured_at: datetime | None = None,
+        capacity_notional_hkd: float | None = None,
+        capacity_quantity: int | None = None,
     ) -> IocExecutionResult:
         return IocExecutionResult(
             order_id=order.order_id,
@@ -249,4 +331,6 @@ class ProtectedIocExecutor:
             fills=(),
             execution_book_event_ts=book_event_ts,
             execution_book_captured_at=book_captured_at,
+            capacity_notional_hkd=capacity_notional_hkd,
+            capacity_quantity=capacity_quantity,
         )

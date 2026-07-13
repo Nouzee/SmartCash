@@ -1,4 +1,7 @@
+from dataclasses import replace
 from datetime import datetime, timedelta
+
+import pytest
 
 from smartcash import SNAPSHOT_SCHEMA_VERSION
 from smartcash.contracts import (
@@ -122,3 +125,53 @@ def test_late_stale_book_is_audited_but_does_not_replace_newer_exchange_state() 
 
     assert steps[0].decision_state.feature.book_event_ts == current_book.event_ts
     assert steps[0].execution_state.bids == current_book.bids
+
+
+def test_dual_plane_snapshot_rejects_a_mismatched_source_watermark() -> None:
+    book = BookSnapshotEvent(
+        symbol="00700.HK",
+        event_ts=BASE + timedelta(seconds=1),
+        captured_at=BASE + timedelta(seconds=1),
+        bids=(BookLevel(100.0, 1_000),),
+        asks=(BookLevel(100.2, 800),),
+        source="xtquant.l2thousand",
+    )
+    engine = SmartCashEngine()
+    engine.set_session(SessionContext(BASE.date(), BASE, BASE, True))
+    engine.ingest(book)
+    step = engine.step_snapshot("00700.HK", BASE + timedelta(seconds=2))
+    mismatched = replace(
+        step.source_watermark,
+        book_captured_at=BASE + timedelta(seconds=1, milliseconds=1),
+    )
+
+    with pytest.raises(ValueError, match="watermark"):
+        replace(step, source_watermark=mismatched)
+
+
+def test_negative_latency_book_cannot_split_decision_and_execution_planes() -> None:
+    current_book = BookSnapshotEvent(
+        symbol="00700.HK",
+        event_ts=BASE + timedelta(seconds=1),
+        captured_at=BASE + timedelta(seconds=1),
+        bids=(BookLevel(100.0, 1_000),),
+        asks=(BookLevel(100.2, 800),),
+        source="xtquant.l2thousand",
+    )
+    future_exchange_book = BookSnapshotEvent(
+        symbol="00700.HK",
+        event_ts=BASE + timedelta(seconds=10),
+        captured_at=BASE + timedelta(seconds=2),
+        bids=(BookLevel(101.0, 1_000),),
+        asks=(BookLevel(101.2, 800),),
+        source="xtquant.l2thousand",
+    )
+    engine = SmartCashEngine()
+    engine.set_session(SessionContext(BASE.date(), BASE, BASE, True))
+    engine.ingest(current_book)
+    engine.ingest(future_exchange_book)
+
+    step = engine.step_snapshot("00700.HK", BASE + timedelta(seconds=3))
+
+    assert step.decision_state.feature.book_event_ts == current_book.event_ts
+    assert step.execution_state.book_event_ts == current_book.event_ts

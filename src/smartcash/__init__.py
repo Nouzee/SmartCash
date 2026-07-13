@@ -12,6 +12,7 @@ from .contracts import (
 )
 from .engine import SmartCashEngine, SmartMoneyEngine
 from .execution import (
+    ExecutionCapacity,
     IocExecutionResult,
     IocExecutionStatus,
     OrderSide,
@@ -30,6 +31,7 @@ __all__ = [
     "FlowPriceState",
     "MicrostructureStepSnapshot",
     "IocExecutionResult",
+    "ExecutionCapacity",
     "IocExecutionStatus",
     "OrderSide",
     "PointInTimeInstrumentRules",

@@ -4,7 +4,7 @@ Date: 2026-07-13 (Asia/Shanghai)
 
 ## Decision
 
-Phase 0 has started, but real-factor estimation remains blocked. The workspace does not currently contain a complete Hong Kong `hktransaction + l2thousand` event set that can pass the project contract. Synthetic replay remains a wiring test only.
+Phase 0 has started, but real-factor estimation remains blocked. The user has now fixed Vault as the research data source and Beast as the data-processing script owner. No Vault mount/API or complete Vault-derived Hong Kong `hktransaction + l2thousand` artifact was discoverable in this workspace, so synthetic replay remains a wiring test only.
 
 ## Evidence collected
 
@@ -44,9 +44,9 @@ Every invocation requires a new or empty output directory. This prevents a faile
 
 ## Unblock requirements
 
-1. Start a separate research capture from market open for a small liquid universe, initially `00700.HK`, `00939.HK`, `02723.HK`, and `06715.HK`.
-2. Subscribe and persist raw `hktransaction` and raw `l2thousand` together, retaining exchange timestamp, callback arrival timestamp, sequence/trade ID and source contract; the capture adapter must also persist subscription ACK, monitor heartbeats and dropped-callback counters as a separate evidence artifact.
-3. Do not route `hkbrokerqueueex` into this capture's trade or L2 tables.
+1. Provide the configured Vault dataset endpoint/mount and pin a small liquid-universe dataset, initially `00700.HK`, `00939.HK`, `02723.HK`, and `06715.HK`.
+2. Add/run a Beast-owned SmartCash transform that emits canonical raw `hktransaction` and `l2thousand` together, retaining exchange timestamp, callback arrival timestamp, sequence/trade ID and source contract; subscription ACK, monitor heartbeats and dropped-callback counters remain separate evidence.
+3. Emit the versioned Vault/Beast lineage manifest and do not route `hkbrokerqueueex` into the trade or L2 artifact.
 4. Collect at least ten complete sessions before fitting score weights.
 5. First publish daily quality reports; only sessions passing the hard gates may enter feature/label generation.
 
@@ -54,4 +54,4 @@ Every invocation requires a new or empty output directory. This prevents a faile
 
 Status: `BLOCKED_FOR_EMPIRICAL_CLAIMS`, not blocked for engineering.
 
-The next engineering tracer is a standalone raw capture/export adapter. It must not change the production webpage and must not label a partial afternoon capture as a complete day.
+The next engineering tracer is the Beast-owned Vault-to-SmartCash transform entry point plus one manifest-valid sample artifact. It must not change the production webpage and must not label a partial afternoon capture as a complete day.

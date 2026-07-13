@@ -34,6 +34,7 @@ def _registry(path: Path | None) -> IdentityRegistry:
     if path is None:
         return IdentityRegistry()
     records = []
+    identity_file_sha256 = _sha256_file(path)
     with path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             external_aliases = ()
@@ -63,6 +64,8 @@ def _registry(path: Path | None) -> IdentityRegistry:
                     skill_score=float(row.get("skill_score", 0.0)),
                     effective_from=_date(row["effective_from"]) or date.min,
                     effective_to=_date(row.get("effective_to", "")),
+                    mapping_source=str(row.get("mapping_source") or "identity_csv"),
+                    mapping_version=str(row.get("mapping_version") or identity_file_sha256),
                 )
             )
     return IdentityRegistry(tuple(records))

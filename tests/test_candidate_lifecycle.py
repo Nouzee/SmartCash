@@ -63,6 +63,33 @@ def test_candidate_requires_two_fresh_consecutive_gate_passes() -> None:
     assert stale.consecutive_passes == 0
     assert confirmed.status is CandidateStatus.CONFIRMED
     assert confirmed.confirmed_at == BASE + timedelta(seconds=4)
+    assert tuple(item.checkpoint_at for item in confirmed.checkpoints) == (
+        BASE + timedelta(seconds=1),
+        BASE + timedelta(seconds=2),
+        BASE + timedelta(seconds=3),
+        BASE + timedelta(seconds=4),
+    )
+    assert confirmed.checkpoints[-2].source_watermark.trade_id == "t3"
+    assert confirmed.checkpoints[-1].source_watermark.trade_id == "t4"
+
+
+def test_candidate_rejects_subsecond_confirmation_checkpoints() -> None:
+    tracker = CandidateTracker(confirmation_passes=2, observation_seconds=5)
+    candidate = tracker.detect(
+        symbol="00700.HK",
+        direction=1,
+        detected_at=BASE,
+        source_watermark=watermark(0, "t0"),
+    )
+
+    with pytest.raises(ValueError, match="one-second cadence"):
+        tracker.observe(
+            candidate.candidate_id,
+            checkpoint_at=BASE + timedelta(milliseconds=500),
+            gate_passed=True,
+            aligned_directional_trade=True,
+            source_watermark=watermark(1, "t1"),
+        )
 
 
 def test_expired_cluster_must_rearm_before_a_new_candidate() -> None:
