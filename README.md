@@ -189,6 +189,7 @@ JSONL 每行：
 ```bash
 PYTHONPATH=src /opt/conda/envs/research/bin/python -m smartcash.cli \
   --events-jsonl /path/to/events.jsonl \
+  --vault-beast-manifest /path/to/vault_beast_manifest.json \
   --identity-csv /path/to/identity_asof.csv \
   --output-dir artifacts/real-replay \
   --dataset-mode historical_replay \
@@ -206,7 +207,7 @@ PYTHONPATH=src /opt/conda/envs/research/bin/python -m smartcash.cli \
 
 Phase 0 对逐笔和 L2 分别检查 exchange event time、`captured_at` 覆盖、负延迟、回调乱序和过期到达；逐笔另查 sequence、重复 trade ID 与独立整日 capture envelope，L2 另查 crossed/locked、首尾和连续 gap。L2 最大 gap 与 callback 延迟阈值只能收紧，分别不能放宽到 5 秒和 1,000 毫秒以上。交易时段按冻结的 2025–2026 HKEX 开市日、休市日与半日市表校验，且时间戳必须为香港 `+08:00`；普通日为 09:30–12:00、13:00–16:00，半日市为 09:30–12:00。12:00–13:00 午休不计 gap。
 
-因子 replay 必须同时满足三道硬门：独立逐笔 capture evidence、独立方向核验 JSON（匹配的 `direction_convention`、`verified=true`、带时区 `verified_at` 和非空 `evidence`），以及 `--coverage-complete` 声明下所有预期股票均通过验收。任一道不通过都不会生成 feature 或未来 label；此时只能用 `--quality-only` 生成 Phase 0 质量报告。
+历史因子 replay 必须同时满足四道硬门：与事件 JSONL 哈希一致的 Vault/Beast lineage manifest、独立逐笔 capture evidence、独立方向核验 JSON（匹配的 `direction_convention`、`verified=true`、带时区 `verified_at` 和非空 `evidence`），以及 `--coverage-complete` 声明下所有预期股票均通过验收。任一道不通过都不会生成 feature 或未来 label；此时只能用 `--quality-only` 生成 Phase 0 质量报告。
 
 `--output-dir` 必须不存在或为空；每次运行使用独立目录。CLI 不会让本次失败/quality-only 的质量报告与上一次成功运行留下的 feature、label 或 shock 文件混在一起。
 

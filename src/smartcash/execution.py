@@ -121,6 +121,7 @@ class IocFill:
 
 @dataclass(frozen=True, slots=True)
 class IocExecutionResult:
+    run_id: str
     order_id: str
     status: IocExecutionStatus
     requested_quantity: int
@@ -136,9 +137,12 @@ class IocExecutionResult:
 
 
 class ProtectedIocExecutor:
-    """Sweep up to five displayed levels with explicit price/capacity guards."""
+    """Run-scoped sweep simulator with explicit price/capacity guards."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, run_id: str) -> None:
+        if not run_id:
+            raise ValueError("run_id is required")
+        self.run_id = run_id
         self._terminal_order_ids: set[str] = set()
 
     def execute(
@@ -168,7 +172,10 @@ class ProtectedIocExecutor:
             )
 
         execution = step.execution_state
-        if execution.book_captured_at < order.eligible_from:
+        if (
+            execution.book_captured_at < order.eligible_from
+            or execution.book_captured_at <= order.decision_time
+        ):
             return self._empty(order, IocExecutionStatus.WAITING_FOR_NEW_BOOK)
         if not step.complete:
             return self._empty(order, IocExecutionStatus.WAITING_FOR_QUALITY_BOOK)
@@ -255,6 +262,7 @@ class ProtectedIocExecutor:
         )
         return self._terminal(
             IocExecutionResult(
+                run_id=self.run_id,
                 order_id=order.order_id,
                 status=status,
                 requested_quantity=order.quantity,
@@ -308,8 +316,8 @@ class ProtectedIocExecutor:
                 break
         return float(notional) if remaining == 0 else float("inf")
 
-    @staticmethod
     def _empty(
+        self,
         order: ProtectedIocOrder,
         status: IocExecutionStatus,
         *,
@@ -321,6 +329,7 @@ class ProtectedIocExecutor:
         capacity_quantity: int | None = None,
     ) -> IocExecutionResult:
         return IocExecutionResult(
+            run_id=self.run_id,
             order_id=order.order_id,
             status=status,
             requested_quantity=order.quantity,

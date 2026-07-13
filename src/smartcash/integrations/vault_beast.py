@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 
 VAULT_BEAST_MANIFEST_SCHEMA_VERSION = "smartcash.vault-beast.v1"
@@ -38,6 +41,10 @@ class BeastTransformRef:
     def __post_init__(self) -> None:
         if not self.script or not self.commit:
             raise ValueError("Beast script and commit are required")
+        if len(self.commit) not in (40, 64) or any(
+            character not in "0123456789abcdef" for character in self.commit.lower()
+        ):
+            raise ValueError("Beast commit must be a full immutable Git digest")
         _require_sha256(self.config_sha256, "Beast config_sha256")
 
     def to_dict(self) -> dict[str, str]:
@@ -84,6 +91,50 @@ class VaultBeastArtifactManifest:
             "preserves_captured_at": self.preserves_captured_at,
             "broker_queue_used": self.broker_queue_used,
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "VaultBeastArtifactManifest":
+        vault = payload.get("vault")
+        beast = payload.get("beast")
+        if not isinstance(vault, dict) or not isinstance(beast, dict):
+            raise ValueError("Vault/Beast manifest requires vault and beast objects")
+        source_kinds = payload.get("source_kinds")
+        if not isinstance(source_kinds, list) or not all(
+            isinstance(value, str) for value in source_kinds
+        ):
+            raise ValueError("Vault/Beast source_kinds must be a list of strings")
+        return cls(
+            vault=VaultDatasetRef(
+                dataset_id=str(vault.get("dataset_id") or ""),
+                version=str(vault.get("version") or ""),
+                content_sha256=str(vault.get("content_sha256") or ""),
+            ),
+            beast=BeastTransformRef(
+                script=str(beast.get("script") or ""),
+                commit=str(beast.get("commit") or ""),
+                config_sha256=str(beast.get("config_sha256") or ""),
+            ),
+            artifact_sha256=str(payload.get("artifact_sha256") or ""),
+            source_kinds=tuple(source_kinds),
+            preserves_event_ts=payload.get("preserves_event_ts") is True,
+            preserves_captured_at=payload.get("preserves_captured_at") is True,
+            broker_queue_used=payload.get("broker_queue_used") is True,
+            schema_version=str(payload.get("schema_version") or ""),
+        )
+
+
+def load_vault_beast_manifest(
+    path: Path,
+    *,
+    expected_artifact_sha256: str,
+) -> VaultBeastArtifactManifest:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Vault/Beast manifest root must be an object")
+    manifest = VaultBeastArtifactManifest.from_dict(payload)
+    if manifest.artifact_sha256 != expected_artifact_sha256:
+        raise ValueError("Vault/Beast artifact hash does not match the replay input")
+    return manifest
 
 
 def _require_sha256(value: str, label: str) -> None:

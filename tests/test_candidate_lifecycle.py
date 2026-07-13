@@ -92,6 +92,34 @@ def test_candidate_rejects_subsecond_confirmation_checkpoints() -> None:
         )
 
 
+def test_missing_a_one_second_checkpoint_breaks_confirmation_consecutiveness() -> None:
+    tracker = CandidateTracker(confirmation_passes=2, observation_seconds=5)
+    candidate = tracker.detect(
+        symbol="00700.HK",
+        direction=1,
+        detected_at=BASE,
+        source_watermark=watermark(0, "t0"),
+    )
+    first = tracker.observe(
+        candidate.candidate_id,
+        checkpoint_at=BASE + timedelta(seconds=1),
+        gate_passed=True,
+        aligned_directional_trade=True,
+        source_watermark=watermark(1, "t1"),
+    )
+    after_gap = tracker.observe(
+        candidate.candidate_id,
+        checkpoint_at=BASE + timedelta(seconds=5),
+        gate_passed=True,
+        aligned_directional_trade=True,
+        source_watermark=watermark(5, "t5"),
+    )
+
+    assert first.consecutive_passes == 1
+    assert after_gap.status is CandidateStatus.OBSERVING
+    assert after_gap.consecutive_passes == 1
+
+
 def test_expired_cluster_must_rearm_before_a_new_candidate() -> None:
     tracker = CandidateTracker(confirmation_passes=2, observation_seconds=5)
     candidate = tracker.detect(

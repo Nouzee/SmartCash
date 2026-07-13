@@ -16,6 +16,7 @@ from .vault_beast import (
     BeastTransformRef,
     VaultBeastArtifactManifest,
     VaultDatasetRef,
+    load_vault_beast_manifest,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "BeastTransformRef",
     "VaultBeastArtifactManifest",
     "VaultDatasetRef",
+    "load_vault_beast_manifest",
 ]

@@ -21,6 +21,7 @@ from .data_quality import (
 )
 from .engine import SmartCashEngine
 from .identity import ExternalIdentityAlias, IdentityRecord, IdentityRegistry
+from .integrations.vault_beast import load_vault_beast_manifest
 from .replay import MarkoutLabeler, MarketEvent, ReplayRunner
 from .reporting import feature_row, label_row, shock_rows, summary_rows, write_csv
 from .xtquant import DirectionConvention, normalize_hktransaction, normalize_l2thousand
@@ -263,6 +264,7 @@ def main() -> None:
     )
     parser.add_argument("--events-jsonl", type=Path, required=True)
     parser.add_argument("--identity-csv", type=Path)
+    parser.add_argument("--vault-beast-manifest", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--direction-convention", choices=[item.value for item in DirectionConvention], required=True)
     parser.add_argument("--session-start", required=True)
@@ -299,6 +301,14 @@ def main() -> None:
 
     direction_convention = DirectionConvention(args.direction_convention)
     events_sha256 = _sha256_file(args.events_jsonl)
+    vault_beast_manifest = (
+        load_vault_beast_manifest(
+            args.vault_beast_manifest,
+            expected_artifact_sha256=events_sha256,
+        )
+        if args.vault_beast_manifest is not None
+        else None
+    )
     events, tape_audit, book_input_audit = load_events(
         args.events_jsonl,
         direction_convention,
@@ -395,6 +405,9 @@ def main() -> None:
             "duplicate_trade_id_count": tape_audit.duplicate_trade_id_count,
             "sequence_gap_count": tape_audit.sequence_gap_count,
             "data_quality_rows": len(quality_rows),
+            "vault_beast_lineage": (
+                vault_beast_manifest.to_dict() if vault_beast_manifest is not None else None
+            ),
         }
         with (args.output_dir / "manifest.json").open("w", encoding="utf-8") as handle:
             json.dump(manifest, handle, ensure_ascii=False, indent=2)
@@ -406,6 +419,8 @@ def main() -> None:
         raise ValueError(
             "factor replay requires --coverage-complete and every expected symbol to pass coverage"
         )
+    if args.dataset_mode == "historical_replay" and vault_beast_manifest is None:
+        raise ValueError("historical factor replay requires a Vault/Beast lineage manifest")
     engine = SmartCashEngine(identity_registry=registry)
     engine.set_session(
         SessionContext(
@@ -473,6 +488,9 @@ def main() -> None:
         "shock_events": len(shock_events),
         "shock_outcomes": len(shock_outcomes),
         "data_quality_rows": len(quality_rows),
+        "vault_beast_lineage": (
+            vault_beast_manifest.to_dict() if vault_beast_manifest is not None else None
+        ),
     }
     with (args.output_dir / "manifest.json").open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)

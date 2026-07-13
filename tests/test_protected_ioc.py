@@ -70,7 +70,7 @@ def test_protected_ioc_uses_execution_book_and_stricter_price_guard() -> None:
         tick_size=0.01,
     )
 
-    result = ProtectedIocExecutor().execute(
+    result = ProtectedIocExecutor(run_id="test-run").execute(
         _buy_order(eligible_from=eligible_from), step, rules, CAPACITY
     )
 
@@ -95,7 +95,7 @@ def test_protected_ioc_waits_for_a_book_captured_after_eligibility() -> None:
         tick_size=0.01,
     )
 
-    result = ProtectedIocExecutor().execute(
+    result = ProtectedIocExecutor(run_id="test-run").execute(
         _buy_order(eligible_from=eligible_from), stale_step, rules, CAPACITY
     )
 
@@ -114,7 +114,7 @@ def test_protected_ioc_rejects_rules_that_were_not_effective_at_decision_time() 
         tick_size=0.01,
     )
 
-    result = ProtectedIocExecutor().execute(
+    result = ProtectedIocExecutor(run_id="test-run").execute(
         _buy_order(eligible_from=eligible_from),
         step,
         future_rules,
@@ -135,7 +135,7 @@ def test_protected_ioc_waits_for_quality_and_can_only_terminate_once() -> None:
         board_lot=100,
         tick_size=0.01,
     )
-    executor = ProtectedIocExecutor()
+    executor = ProtectedIocExecutor(run_id="test-run")
     order = _buy_order(eligible_from=eligible_from)
 
     waiting = executor.execute(order, incomplete, rules, CAPACITY)
@@ -156,7 +156,7 @@ def test_capacity_uses_notional_cash_and_one_aggregate_board_lot_rounding() -> N
         board_lot=100,
         tick_size=0.01,
     )
-    cash_limited = ProtectedIocExecutor().execute(
+    cash_limited = ProtectedIocExecutor(run_id="cash-run").execute(
         _buy_order(eligible_from=eligible_from),
         _step(captured_at=eligible_from),
         rules,
@@ -173,7 +173,7 @@ def test_capacity_uses_notional_cash_and_one_aggregate_board_lot_rounding() -> N
         expires_at=eligible_from + timedelta(seconds=5),
         visible_participation=1.0,
     )
-    aggregate_lot = ProtectedIocExecutor().execute(
+    aggregate_lot = ProtectedIocExecutor(run_id="aggregate-run").execute(
         two_odd_levels,
         _step(
             captured_at=eligible_from,
@@ -188,3 +188,21 @@ def test_capacity_uses_notional_cash_and_one_aggregate_board_lot_rounding() -> N
     assert aggregate_lot.status is IocExecutionStatus.FILLED
     assert aggregate_lot.filled_quantity == 100
     assert tuple(fill.quantity for fill in aggregate_lot.fills) == (50, 50)
+
+
+def test_zero_latency_order_cannot_fill_from_its_decision_snapshot() -> None:
+    step = _step(captured_at=BASE)
+    rules = PointInTimeInstrumentRules(
+        symbol="00700.HK",
+        effective_at=OPEN,
+        board_lot=100,
+        tick_size=0.01,
+    )
+    order = _buy_order(eligible_from=BASE)
+
+    result = ProtectedIocExecutor(run_id="same-event-run").execute(
+        order, step, rules, CAPACITY
+    )
+
+    assert result.status is IocExecutionStatus.WAITING_FOR_NEW_BOOK
+    assert result.run_id == "same-event-run"

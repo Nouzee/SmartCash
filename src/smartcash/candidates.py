@@ -138,6 +138,7 @@ class CandidateTracker:
             )
         )
         passed = gate_passed and aligned_directional_trade and fresh_book and fresh_trade
+        consecutive_cadence = checkpoint_at - candidate.last_checkpoint_at == timedelta(seconds=1)
         checkpoint = CandidateCheckpoint(
             checkpoint_at=checkpoint_at,
             gate_passed=gate_passed,
@@ -147,7 +148,11 @@ class CandidateTracker:
             passed=passed,
             source_watermark=source_watermark,
         )
-        consecutive_passes = candidate.consecutive_passes + 1 if passed else 0
+        consecutive_passes = (
+            candidate.consecutive_passes + 1
+            if passed and consecutive_cadence
+            else 1 if passed else 0
+        )
         status = (
             CandidateStatus.CONFIRMED
             if consecutive_passes >= self.confirmation_passes
