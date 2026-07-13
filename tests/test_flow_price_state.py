@@ -18,7 +18,17 @@ BASE = datetime.fromisoformat("2026-01-05T09:30:00+08:00")
 def engine() -> SmartMoneyEngine:
     registry = IdentityRegistry(
         (
-            IdentityRecord("0101", "Alpha Limited", "Alpha", "P1", "Alpha Limited", "Alpha", 1.0, date(2020, 1, 1)),
+            IdentityRecord(
+                "0101",
+                "Seat 0101",
+                "0101",
+                "broker-alpha",
+                "Alpha Limited",
+                "Alpha",
+                (),
+                1.0,
+                date(2020, 1, 1),
+            ),
         )
     )
     result = SmartMoneyEngine(identity_registry=registry)

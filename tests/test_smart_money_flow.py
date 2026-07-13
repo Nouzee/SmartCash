@@ -24,8 +24,8 @@ def trade(seconds: int, turnover: float, side: AggressorSide, broker: str) -> Tr
         volume=int(turnover / 100),
         turnover=turnover,
         aggressor_side=side,
-        active_broker_code=broker,
-        passive_broker_code="9999",
+        active_seat_code=broker,
+        passive_seat_code="9999",
         trade_id=str(seconds),
         side_contract="test_canonical",
     )
@@ -35,22 +35,24 @@ def registry() -> IdentityRegistry:
     return IdentityRegistry(
         (
             IdentityRecord(
-                broker_code="0101",
-                broker_full_name="Institutional Alpha Securities Limited",
-                broker_display_name="Alpha Inst",
-                participant_id="P001",
-                participant_full_name="Institutional Alpha Securities Limited",
-                participant_display_name="Alpha Inst",
+                seat_code="0101",
+                seat_full_name="Seat 0101",
+                seat_display_name="0101",
+                broker_entity_id="broker-alpha",
+                broker_entity_full_name="Institutional Alpha Securities Limited",
+                broker_entity_display_name="Alpha Inst",
+                external_aliases=(),
                 skill_score=0.8,
                 effective_from=date(2020, 1, 1),
             ),
             IdentityRecord(
-                broker_code="0102",
-                broker_full_name="Other Securities Limited",
-                broker_display_name="Other",
-                participant_id="P002",
-                participant_full_name="Other Securities Limited",
-                participant_display_name="Other",
+                seat_code="0102",
+                seat_full_name="Seat 0102",
+                seat_display_name="0102",
+                broker_entity_id="broker-other",
+                broker_entity_full_name="Other Securities Limited",
+                broker_entity_display_name="Other",
+                external_aliases=(),
                 skill_score=0.0,
                 effective_from=date(2020, 1, 1),
             ),
@@ -91,13 +93,13 @@ def test_rolling_flow_uses_active_identity_and_excludes_neutral_direction() -> N
     assert flow.directional_flow_ratio == pytest.approx(0.75)
     assert flow.signed_flow_ratio == pytest.approx(0.5)
     assert flow.neutral_share == pytest.approx(0.2)
-    assert flow.broker_mapping_coverage == pytest.approx(1.0)
-    assert flow.participant_mapping_coverage == pytest.approx(1.0)
+    assert flow.seat_identity_coverage == pytest.approx(1.0)
+    assert flow.broker_entity_mapping_coverage == pytest.approx(1.0)
     assert flow.skill_weighted_flow == pytest.approx(0.6)
-    assert flow.top_broker_net_concentration == pytest.approx(0.75)
-    assert flow.top_participant_net_concentration == pytest.approx(0.75)
-    assert flow.top_brokers[0].broker_full_name == "Institutional Alpha Securities Limited"
-    assert flow.top_brokers[0].broker_display_name == "Alpha Inst"
+    assert flow.top_seat_net_concentration == pytest.approx(0.75)
+    assert flow.top_broker_entity_net_concentration == pytest.approx(0.75)
+    assert flow.top_broker_entities[0].broker_entity_full_name == "Institutional Alpha Securities Limited"
+    assert flow.top_broker_entities[0].broker_entity_display_name == "Alpha Inst"
     assert feature.complete
     assert feature.confidence > 0
 

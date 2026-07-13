@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Sequence
 
-from .contracts import BookSnapshotEvent, FeatureSnapshot, TradeEvent
-from .engine import SmartMoneyEngine
+from .contracts import BookSnapshotEvent, FeatureSnapshot, MicrostructureStepSnapshot, TradeEvent
+from .engine import SmartCashEngine
 
 MarketEvent = BookSnapshotEvent | TradeEvent
 
@@ -13,7 +13,7 @@ MarketEvent = BookSnapshotEvent | TradeEvent
 class ReplayRunner:
     """Deterministic event-time replay; no wall-clock or future-data access."""
 
-    def __init__(self, engine: SmartMoneyEngine) -> None:
+    def __init__(self, engine: SmartCashEngine) -> None:
         self.engine = engine
 
     def run(
@@ -23,8 +23,8 @@ class ReplayRunner:
         snapshot_times: Sequence[datetime],
     ) -> tuple[FeatureSnapshot, ...]:
         ordered_events = list(events)
-        if any(current.event_ts < previous.event_ts for previous, current in zip(ordered_events, ordered_events[1:], strict=False)):
-            raise ValueError("replay events must be non-decreasing by event_ts")
+        if any(current.captured_at < previous.captured_at for previous, current in zip(ordered_events, ordered_events[1:], strict=False)):
+            raise ValueError("replay events must be non-decreasing by captured_at")
         ordered_times = tuple(snapshot_times)
         if any(current <= previous for previous, current in zip(ordered_times, ordered_times[1:], strict=False)):
             raise ValueError("snapshot_times must be strictly increasing")
@@ -32,7 +32,7 @@ class ReplayRunner:
         active_symbols: set[str] = set()
         features: list[FeatureSnapshot] = []
         for snapshot_ts in ordered_times:
-            while cursor < len(ordered_events) and ordered_events[cursor].event_ts <= snapshot_ts:
+            while cursor < len(ordered_events) and ordered_events[cursor].captured_at <= snapshot_ts:
                 event = ordered_events[cursor]
                 self.engine.ingest(event)
                 active_symbols.add(event.symbol)
@@ -43,6 +43,40 @@ class ReplayRunner:
                 except LookupError:
                     continue
         return tuple(features)
+
+    def run_steps(
+        self,
+        events: Sequence[MarketEvent],
+        *,
+        checkpoint_times: Sequence[datetime],
+    ) -> tuple[MicrostructureStepSnapshot, ...]:
+        ordered_events = list(events)
+        if any(
+            current.captured_at < previous.captured_at
+            for previous, current in zip(ordered_events, ordered_events[1:], strict=False)
+        ):
+            raise ValueError("replay events must be non-decreasing by captured_at")
+        ordered_times = tuple(checkpoint_times)
+        if any(
+            current <= previous
+            for previous, current in zip(ordered_times, ordered_times[1:], strict=False)
+        ):
+            raise ValueError("checkpoint_times must be strictly increasing")
+        cursor = 0
+        active_symbols: set[str] = set()
+        steps: list[MicrostructureStepSnapshot] = []
+        for checkpoint in ordered_times:
+            while cursor < len(ordered_events) and ordered_events[cursor].captured_at <= checkpoint:
+                event = ordered_events[cursor]
+                self.engine.ingest(event)
+                active_symbols.add(event.symbol)
+                cursor += 1
+            for symbol in sorted(active_symbols):
+                try:
+                    steps.append(self.engine.step_snapshot(symbol, checkpoint))
+                except LookupError:
+                    continue
+        return tuple(steps)
 
 
 @dataclass(frozen=True, slots=True)

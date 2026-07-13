@@ -5,20 +5,34 @@ from datetime import date
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalIdentityAlias:
+    source: str
+    alias_type: str
+    value: str
+
+    def __post_init__(self) -> None:
+        if not self.source or not self.alias_type or not self.value:
+            raise ValueError("external identity alias fields are required")
+
+
+@dataclass(frozen=True, slots=True)
 class IdentityRecord:
-    broker_code: str
-    broker_full_name: str
-    broker_display_name: str
-    participant_id: str
-    participant_full_name: str
-    participant_display_name: str
+    seat_code: str
+    seat_full_name: str
+    seat_display_name: str
+    broker_entity_id: str
+    broker_entity_full_name: str
+    broker_entity_display_name: str
+    external_aliases: tuple[ExternalIdentityAlias, ...]
     skill_score: float
     effective_from: date
     effective_to: date | None = None
 
     def __post_init__(self) -> None:
-        if not self.broker_code:
-            raise ValueError("broker_code is required")
+        if not self.seat_code:
+            raise ValueError("seat_code is required")
+        if not self.broker_entity_id:
+            raise ValueError("broker_entity_id is required")
         if not -1 <= self.skill_score <= 1:
             raise ValueError("skill_score must be within [-1, 1]")
         if self.effective_to is not None and self.effective_to < self.effective_from:
@@ -26,20 +40,19 @@ class IdentityRecord:
 
 
 class IdentityRegistry:
-    """As-of broker/participant identity and lagged skill priors."""
+    """SmartCash-owned as-of seat/broker-entity identity and lagged skill priors."""
 
     def __init__(self, records: tuple[IdentityRecord, ...] = ()) -> None:
-        self._by_broker: dict[str, list[IdentityRecord]] = {}
+        self._by_seat: dict[str, list[IdentityRecord]] = {}
         for record in records:
-            self._by_broker.setdefault(record.broker_code, []).append(record)
-        for values in self._by_broker.values():
+            self._by_seat.setdefault(record.seat_code, []).append(record)
+        for values in self._by_seat.values():
             values.sort(key=lambda item: item.effective_from)
 
-    def resolve(self, broker_code: str, as_of: date) -> IdentityRecord | None:
+    def resolve_seat(self, seat_code: str, as_of: date) -> IdentityRecord | None:
         matches = [
             record
-            for record in self._by_broker.get(broker_code, ())
+            for record in self._by_seat.get(seat_code, ())
             if record.effective_from <= as_of and (record.effective_to is None or as_of <= record.effective_to)
         ]
         return matches[-1] if matches else None
-

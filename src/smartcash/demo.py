@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .contracts import AggressorSide, BookLevel, BookSnapshotEvent, SessionContext, TradeEvent
-from .engine import SmartMoneyEngine
+from .engine import SmartCashEngine
 from .identity import IdentityRecord, IdentityRegistry
 from .replay import MarkoutLabeler, ReplayRunner
 from .reporting import feature_row, label_row, shock_rows, summary_rows, write_csv
@@ -18,8 +18,28 @@ BASE = datetime.fromisoformat("2026-01-05T09:30:00+08:00")
 def _identity_registry() -> IdentityRegistry:
     return IdentityRegistry(
         (
-            IdentityRecord("0101", "Alpha Institutional Securities Limited", "Alpha Inst", "P001", "Alpha Institutional Securities Limited", "Alpha Inst", 0.8, date(2020, 1, 1)),
-            IdentityRecord("0102", "Broad Market Securities Limited", "Broad Market", "P002", "Broad Market Securities Limited", "Broad Market", 0.1, date(2020, 1, 1)),
+            IdentityRecord(
+                "0101",
+                "Seat 0101",
+                "0101",
+                "broker-alpha",
+                "Alpha Institutional Securities Limited",
+                "Alpha Inst",
+                (),
+                0.8,
+                date(2020, 1, 1),
+            ),
+            IdentityRecord(
+                "0102",
+                "Seat 0102",
+                "0102",
+                "broker-broad-market",
+                "Broad Market Securities Limited",
+                "Broad Market",
+                (),
+                0.1,
+                date(2020, 1, 1),
+            ),
         )
     )
 
@@ -58,8 +78,8 @@ def _synthetic_events(duration_seconds: int, seed: int) -> list[BookSnapshotEven
                 volume=volume,
                 turnover=mid * volume,
                 aggressor_side=side,
-                active_broker_code=broker,
-                passive_broker_code="9999",
+                active_seat_code=broker,
+                passive_seat_code="9999",
                 trade_id=f"{symbol}-{second}",
                 side_contract="synthetic_canonical",
                 source="synthetic.hktransaction",
@@ -73,7 +93,7 @@ def run_demo(output_dir: Path, *, duration_seconds: int = 720, seed: int = 7) ->
         raise ValueError("duration_seconds must allow a five-minute markout")
     output_dir.mkdir(parents=True, exist_ok=True)
     events = _synthetic_events(duration_seconds, seed)
-    engine = SmartMoneyEngine(identity_registry=_identity_registry())
+    engine = SmartCashEngine(identity_registry=_identity_registry())
     engine.set_session(SessionContext(BASE.date(), BASE, BASE, True, True))
     last_signal_second = duration_seconds - 300
     snapshot_times = tuple(BASE + timedelta(seconds=second) for second in range(60, last_signal_second + 1, 10))
@@ -106,7 +126,7 @@ def run_demo(output_dir: Path, *, duration_seconds: int = 720, seed: int = 7) ->
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a deterministic synthetic smart-money microstructure replay")
+    parser = argparse.ArgumentParser(description="Run a deterministic synthetic SmartCash microstructure replay")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/demo"))
     parser.add_argument("--duration-seconds", type=int, default=720)
     parser.add_argument("--seed", type=int, default=7)

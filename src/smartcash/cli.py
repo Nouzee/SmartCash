@@ -19,8 +19,8 @@ from .data_quality import (
     active_hk_seconds_between,
     build_data_quality_rows,
 )
-from .engine import SmartMoneyEngine
-from .identity import IdentityRecord, IdentityRegistry
+from .engine import SmartCashEngine
+from .identity import ExternalIdentityAlias, IdentityRecord, IdentityRegistry
 from .replay import MarkoutLabeler, MarketEvent, ReplayRunner
 from .reporting import feature_row, label_row, shock_rows, summary_rows, write_csv
 from .xtquant import DirectionConvention, normalize_hktransaction, normalize_l2thousand
@@ -36,17 +36,30 @@ def _registry(path: Path | None) -> IdentityRegistry:
     records = []
     with path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
+            external_aliases = ()
+            ccass_participant_id = str(
+                row.get("ccass_participant_id") or row.get("participant_id") or ""
+            ).strip()
+            if ccass_participant_id:
+                external_aliases = (
+                    ExternalIdentityAlias(
+                        source=str(row.get("external_alias_source") or "ccass_reference"),
+                        alias_type="participant_id",
+                        value=ccass_participant_id,
+                    ),
+                )
             records.append(
                 IdentityRecord(
-                    broker_code=str(row["broker_code"]).zfill(4),
-                    broker_full_name=row["broker_full_name"],
-                    broker_display_name=row.get("broker_display_name") or row["broker_full_name"],
-                    participant_id=row.get("participant_id", ""),
-                    participant_full_name=row.get("participant_full_name", ""),
-                    participant_display_name=(
-                        row.get("participant_display_name")
-                        or row.get("participant_full_name", "")
+                    seat_code=str(row["seat_code"]).zfill(4),
+                    seat_full_name=row.get("seat_full_name") or str(row["seat_code"]),
+                    seat_display_name=row.get("seat_display_name") or str(row["seat_code"]),
+                    broker_entity_id=row["broker_entity_id"],
+                    broker_entity_full_name=row["broker_entity_full_name"],
+                    broker_entity_display_name=(
+                        row.get("broker_entity_display_name")
+                        or row["broker_entity_full_name"]
                     ),
+                    external_aliases=external_aliases,
                     skill_score=float(row.get("skill_score", 0.0)),
                     effective_from=_date(row["effective_from"]) or date.min,
                     effective_to=_date(row.get("effective_to", "")),
@@ -77,7 +90,12 @@ def load_events(
             if captured_at is not None and captured_at.tzinfo is None:
                 raise ValueError(f"line {line_number}: captured_at must be timezone-aware")
             if kind == "hktransaction":
-                event = normalize_hktransaction(symbol=symbol, raw=payload, convention=convention)
+                event = normalize_hktransaction(
+                    symbol=symbol,
+                    raw=payload,
+                    convention=convention,
+                    captured_at=captured_at,
+                )
                 tape_auditor.record(
                     event,
                     raw_sequence=payload.get("seq"),
@@ -86,7 +104,11 @@ def load_events(
                 events.append(event)
             elif kind == "l2thousand":
                 try:
-                    event = normalize_l2thousand(symbol=symbol, raw=payload)
+                    event = normalize_l2thousand(
+                        symbol=symbol,
+                        raw=payload,
+                        captured_at=captured_at,
+                    )
                 except ValueError as error:
                     book_auditor.record_rejection(symbol, error)
                     continue
@@ -96,7 +118,7 @@ def load_events(
                 raise ValueError(f"line {line_number}: broker_queue cannot enter the trade/book replay")
             else:
                 raise ValueError(f"line {line_number}: unsupported event kind {kind!r}")
-    return sorted(events, key=lambda event: event.event_ts), tape_auditor.snapshot(), book_auditor.snapshot()
+    return events, tape_auditor.snapshot(), book_auditor.snapshot()
 
 
 def load_side_verification(path: Path, convention: DirectionConvention) -> dict[str, object]:
@@ -234,7 +256,7 @@ def _sha256_file(path: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Replay XTQuant HK trades and L2 snapshots into causal smart-money features"
+        description="Replay XTQuant HK trades and L2 snapshots into causal SmartCash features"
     )
     parser.add_argument("--events-jsonl", type=Path, required=True)
     parser.add_argument("--identity-csv", type=Path)
@@ -381,7 +403,7 @@ def main() -> None:
         raise ValueError(
             "factor replay requires --coverage-complete and every expected symbol to pass coverage"
         )
-    engine = SmartMoneyEngine(identity_registry=registry)
+    engine = SmartCashEngine(identity_registry=registry)
     engine.set_session(
         SessionContext(
             trade_date,

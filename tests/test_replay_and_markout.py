@@ -24,12 +24,13 @@ def book(seconds: int, bid: float, ask: float, bid_size: int = 100, ask_size: in
 
 def test_future_events_do_not_change_past_replay_snapshot() -> None:
     identity = IdentityRecord(
-        broker_code="0101",
-        broker_full_name="Alpha Limited",
-        broker_display_name="Alpha",
-        participant_id="P1",
-        participant_full_name="Alpha Limited",
-        participant_display_name="Alpha",
+        seat_code="0101",
+        seat_full_name="Seat 0101",
+        seat_display_name="0101",
+        broker_entity_id="broker-alpha",
+        broker_entity_full_name="Alpha Limited",
+        broker_entity_display_name="Alpha",
+        external_aliases=(),
         skill_score=1.0,
         effective_from=BASE.date(),
     )
@@ -46,8 +47,8 @@ def test_future_events_do_not_change_past_replay_snapshot() -> None:
         volume=1_000,
         turnover=100_100,
         aggressor_side=AggressorSide.BUY,
-        active_broker_code="0101",
-        passive_broker_code="9999",
+        active_seat_code="0101",
+        passive_seat_code="9999",
         trade_id="1",
         side_contract="canonical",
     )

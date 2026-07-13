@@ -15,7 +15,7 @@ class DirectionConvention(StrEnum):
     THOUSAND_LEGACY = "thousand_legacy_dir_1_buy_2_sell"
 
 
-def _broker_code(value: object) -> str:
+def _seat_code(value: object) -> str:
     if value is None or value == "":
         return ""
     try:
@@ -48,6 +48,7 @@ def normalize_hktransaction(
     symbol: str,
     raw: Mapping[str, Any],
     convention: DirectionConvention,
+    captured_at: datetime | None = None,
 ) -> TradeEvent:
     """Normalize one raw XTQuant trade without inferring missing identities."""
 
@@ -62,10 +63,11 @@ def normalize_hktransaction(
         volume=volume,
         turnover=turnover,
         aggressor_side=_side(raw.get("dir", raw.get("Dir")), convention),
-        active_broker_code=_broker_code(raw.get("activeBrokerNo")),
-        passive_broker_code=_broker_code(raw.get("brokerNo")),
+        active_seat_code=_seat_code(raw.get("activeBrokerNo")),
+        passive_seat_code=_seat_code(raw.get("brokerNo")),
         trade_id=str(raw.get("tradeID", raw.get("seq", ""))),
         side_contract=convention.value,
+        captured_at=captured_at,
     )
 
 
@@ -89,7 +91,12 @@ def _levels(prices: list[Any], sizes: list[Any]) -> tuple[BookLevel, ...]:
     return tuple(levels)
 
 
-def normalize_l2thousand(*, symbol: str, raw: Mapping[str, Any]) -> BookSnapshotEvent:
+def normalize_l2thousand(
+    *,
+    symbol: str,
+    raw: Mapping[str, Any],
+    captured_at: datetime | None = None,
+) -> BookSnapshotEvent:
     """Normalize one XTQuant full-depth snapshot; broker queues are not accepted."""
 
     return BookSnapshotEvent(
@@ -104,4 +111,5 @@ def normalize_l2thousand(*, symbol: str, raw: Mapping[str, Any]) -> BookSnapshot
             _array(raw, "askVolume", "AskVolume"),
         ),
         source="xtquant.l2thousand",
+        captured_at=captured_at,
     )

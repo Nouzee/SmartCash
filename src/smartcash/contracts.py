@@ -6,6 +6,9 @@ from enum import StrEnum
 from math import isfinite
 
 
+SNAPSHOT_SCHEMA_VERSION = "1.0"
+
+
 class AggressorSide(StrEnum):
     BUY = "buy"
     SELL = "sell"
@@ -31,17 +34,22 @@ class TradeEvent:
     volume: int
     turnover: float
     aggressor_side: AggressorSide
-    active_broker_code: str
-    passive_broker_code: str
+    active_seat_code: str
+    passive_seat_code: str
     trade_id: str
     side_contract: str
     source: str = "xtquant.hktransaction"
+    captured_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.symbol:
             raise ValueError("symbol is required")
         if self.event_ts.tzinfo is None:
             raise ValueError("event_ts must be timezone-aware")
+        if self.captured_at is None:
+            object.__setattr__(self, "captured_at", self.event_ts)
+        elif self.captured_at.tzinfo is None:
+            raise ValueError("captured_at must be timezone-aware")
         if not isfinite(self.price) or self.price <= 0:
             raise ValueError("price must be finite and positive")
         if self.volume < 0:
@@ -72,10 +80,15 @@ class BookSnapshotEvent:
     bids: tuple[BookLevel, ...]
     asks: tuple[BookLevel, ...]
     source: str
+    captured_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.event_ts.tzinfo is None:
             raise ValueError("event_ts must be timezone-aware")
+        if self.captured_at is None:
+            object.__setattr__(self, "captured_at", self.event_ts)
+        elif self.captured_at.tzinfo is None:
+            raise ValueError("captured_at must be timezone-aware")
         if "l2thousand" not in self.source.lower():
             raise ValueError("BookSnapshotEvent requires an l2thousand source")
         if not self.bids or not self.asks:
@@ -129,13 +142,89 @@ class FeatureSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class IdentityContribution:
-    broker_code: str
-    broker_full_name: str
-    broker_display_name: str
-    participant_id: str
-    participant_full_name: str
-    participant_display_name: str
+class DecisionState:
+    feature: FeatureSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionState:
+    book_event_ts: datetime
+    book_captured_at: datetime
+    bids: tuple[BookLevel, ...]
+    asks: tuple[BookLevel, ...]
+    last_trade: TradeEvent | None
+
+    def __post_init__(self) -> None:
+        if self.book_event_ts.tzinfo is None or self.book_captured_at.tzinfo is None:
+            raise ValueError("execution timestamps must be timezone-aware")
+        if not self.bids or not self.asks:
+            raise ValueError("execution state requires both sides of the book")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceWatermark:
+    book_event_ts: datetime
+    book_captured_at: datetime
+    trade_event_ts: datetime | None
+    trade_captured_at: datetime | None
+    trade_id: str
+
+    def __post_init__(self) -> None:
+        if self.book_event_ts.tzinfo is None or self.book_captured_at.tzinfo is None:
+            raise ValueError("book watermark timestamps must be timezone-aware")
+        if (self.trade_event_ts is None) != (self.trade_captured_at is None):
+            raise ValueError("trade watermark timestamps must both be present or absent")
+        if self.trade_event_ts is not None and (
+            self.trade_event_ts.tzinfo is None or self.trade_captured_at.tzinfo is None
+        ):
+            raise ValueError("trade watermark timestamps must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class MicrostructureStepSnapshot:
+    schema_version: str
+    symbol: str
+    as_of: datetime
+    decision_state: DecisionState
+    execution_state: ExecutionState
+    source_watermark: SourceWatermark
+    complete: bool
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SNAPSHOT_SCHEMA_VERSION:
+            raise ValueError(f"unsupported snapshot schema version: {self.schema_version}")
+        if self.as_of.tzinfo is None:
+            raise ValueError("snapshot as_of must be timezone-aware")
+        if self.decision_state.feature.symbol != self.symbol:
+            raise ValueError("decision state symbol must match snapshot symbol")
+        if self.decision_state.feature.as_of != self.as_of:
+            raise ValueError("decision state as_of must match snapshot as_of")
+        if self.execution_state.book_captured_at > self.as_of:
+            raise ValueError("execution state cannot contain a future-arriving book")
+        if (
+            self.execution_state.last_trade is not None
+            and self.execution_state.last_trade.captured_at > self.as_of
+        ):
+            raise ValueError("execution state cannot contain a future-arriving trade")
+
+
+@dataclass(frozen=True, slots=True)
+class SeatIdentityContribution:
+    seat_code: str
+    seat_full_name: str
+    seat_display_name: str
+    broker_entity_id: str
+    broker_entity_full_name: str
+    broker_entity_display_name: str
+    net_turnover: float
+    skill_score: float
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerEntityContribution:
+    broker_entity_id: str
+    broker_entity_full_name: str
+    broker_entity_display_name: str
     net_turnover: float
     skill_score: float
 
@@ -149,12 +238,13 @@ class FlowWindowFeatures:
     directional_flow_ratio: float
     signed_flow_ratio: float
     neutral_share: float
-    broker_mapping_coverage: float
-    participant_mapping_coverage: float
+    seat_identity_coverage: float
+    broker_entity_mapping_coverage: float
     skill_weighted_flow: float
-    top_broker_net_concentration: float
-    top_participant_net_concentration: float
-    top_brokers: tuple[IdentityContribution, ...]
+    top_seat_net_concentration: float
+    top_broker_entity_net_concentration: float
+    top_seats: tuple[SeatIdentityContribution, ...]
+    top_broker_entities: tuple[BrokerEntityContribution, ...]
 
 
 @dataclass(frozen=True, slots=True)

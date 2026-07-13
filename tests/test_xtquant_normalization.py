@@ -27,8 +27,8 @@ def test_vendor_direction_and_active_identity_are_explicit() -> None:
     assert sell.event_ts == datetime.fromisoformat("2026-01-05T09:30:01+08:00")
     assert sell.aggressor_side is AggressorSide.SELL
     assert buy.aggressor_side is AggressorSide.BUY
-    assert sell.active_broker_code == "0101"
-    assert sell.passive_broker_code == "9999"
+    assert sell.active_seat_code == "0101"
+    assert sell.passive_seat_code == "9999"
     assert sell.turnover == 400_000.0
     assert sell.side_contract == "xtquant_vendor_doc_dir_1_sell_2_buy"
 
@@ -40,5 +40,19 @@ def test_missing_active_broker_never_falls_back_to_passive_broker() -> None:
         convention=DirectionConvention.VENDOR_DOC,
     )
 
-    assert trade.active_broker_code == ""
-    assert trade.passive_broker_code == "0101"
+    assert trade.active_seat_code == ""
+    assert trade.passive_seat_code == "0101"
+
+
+def test_normalized_trade_preserves_causal_arrival_time() -> None:
+    captured_at = datetime.fromisoformat("2026-01-05T09:30:01.125+08:00")
+
+    trade = normalize_hktransaction(
+        symbol="00700.HK",
+        raw={"time": 1_767_576_601_000, "price": 400.0, "volume": 100, "dir": 2},
+        convention=DirectionConvention.VENDOR_DOC,
+        captured_at=captured_at,
+    )
+
+    assert trade.event_ts == datetime.fromisoformat("2026-01-05T09:30:01+08:00")
+    assert trade.captured_at == captured_at

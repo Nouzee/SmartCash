@@ -351,9 +351,8 @@ class SymbolDataQuality:
     directional_turnover: float
     neutral_turnover: float
     neutral_share: float
-    active_broker_disclosure_coverage: float
-    broker_mapping_coverage: float
-    participant_mapping_coverage: float
+    active_seat_disclosure_coverage: float
+    broker_entity_mapping_coverage: float
     tape_complete: bool
     book_input_complete: bool
     book_coverage_complete: bool
@@ -433,18 +432,15 @@ def build_data_quality_rows(
             event.turnover for event in trades if event.aggressor_side is AggressorSide.NEUTRAL
         )
         disclosed_turnover = 0.0
-        broker_mapped_turnover = 0.0
-        participant_mapped_turnover = 0.0
+        broker_entity_mapped_turnover = 0.0
         for trade in trades:
             if trade.aggressor_side is AggressorSide.NEUTRAL:
                 continue
-            if trade.active_broker_code:
+            if trade.active_seat_code:
                 disclosed_turnover += trade.turnover
-            identity = registry.resolve(trade.active_broker_code, trade.event_ts.date())
+            identity = registry.resolve_seat(trade.active_seat_code, trade.event_ts.date())
             if identity is not None:
-                broker_mapped_turnover += trade.turnover
-                if identity.participant_id:
-                    participant_mapped_turnover += trade.turnover
+                broker_entity_mapped_turnover += trade.turnover
         if books:
             book_gaps = [
                 max(0.0, (books[0].event_ts - expected_open).total_seconds()),
@@ -548,14 +544,13 @@ def build_data_quality_rows(
                 directional_turnover=directional_turnover,
                 neutral_turnover=neutral_turnover,
                 neutral_share=neutral_turnover / total_turnover if total_turnover else 0.0,
-                active_broker_disclosure_coverage=(
+                active_seat_disclosure_coverage=(
                     disclosed_turnover / directional_turnover if directional_turnover else 0.0
                 ),
-                broker_mapping_coverage=(
-                    broker_mapped_turnover / directional_turnover if directional_turnover else 0.0
-                ),
-                participant_mapping_coverage=(
-                    participant_mapped_turnover / directional_turnover if directional_turnover else 0.0
+                broker_entity_mapping_coverage=(
+                    broker_entity_mapped_turnover / directional_turnover
+                    if directional_turnover
+                    else 0.0
                 ),
                 tape_complete=tape_complete,
                 book_input_complete=book_input_complete,

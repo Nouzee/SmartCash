@@ -3,8 +3,8 @@
 ## Phase 0 — 数据验收
 
 1. Thousand 同时采集 `hktransaction` 与 `l2thousand`，保留 exchange event time、sequence/trade ID、active/passive broker。
-2. 用独立 tape 核验 `dir` 方向，未通过前不报告 broker net flow。
-3. 对逐笔/L2 的 event time 与 callback arrival 分别检查缺失、负延迟、乱序和 staleness；另查 sequence gap、重复 trade ID、盘口 crossed/locked、active broker coverage。载入后排序不能抹掉原始质量证据。
+2. 用独立 tape 核验 `dir` 方向，未通过前不报告 seat/broker-entity net flow。
+3. 对逐笔/L2 的 event time 与 callback arrival 分别检查缺失、负延迟、乱序和 staleness；另查 sequence gap、重复 trade ID、盘口 crossed/locked、active-seat coverage。载入后排序不能抹掉原始质量证据。
 4. 调用方显式声明 expected universe；零事件股票也必须有失败行。逐笔完整性另由采集器的 subscription ACK、开收盘 heartbeat envelope 与 dropped callback 计数证明，不能由局部 sequence 连续推断。
 5. 完整日按冻结的 2025–2026 HKEX 开市/休市/半日市日历、香港 `+08:00` 时区和不超过 5 秒的活跃时段 L2 gap 验收，调用方只能收紧阈值。
 6. 记录 `complete_60s/complete_300s/sessionStart/replayed/coverage_complete/max_book_gap_seconds`，不得把 replay 标志或进程启动后的局部会话描述为当日全量。
@@ -37,7 +37,7 @@
 
 ## 晋级条件
 
-- side contract 和 active broker coverage 通过；
+- side contract、active-seat disclosure 和 broker-entity mapping coverage 通过；
 - test-only 多标的、多月结果稳定；
 - full score 相对 book-only/flow-only 有增量；
 - conflict filter 显著降低负 markout 数量和比例；

@@ -26,7 +26,7 @@
 
 ## 本项目自己的假设
 
-- active broker / participant 净流代表潜在 informed flow；
+- active seat / broker entity 净流代表潜在 informed flow；
 - 历史 markout skill prior 能提高身份流质量；
 - OFI、microprice、signed flow persistence 有助于事前确认；
 - concentration 与 price response 的交互有信息；

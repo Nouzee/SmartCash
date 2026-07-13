@@ -25,8 +25,8 @@ def trade(milliseconds: int, turnover: float, broker: str, trade_id: str) -> Tra
         volume=int(turnover / 100),
         turnover=turnover,
         aggressor_side=AggressorSide.BUY,
-        active_broker_code=broker,
-        passive_broker_code="9999",
+        active_seat_code=broker,
+        passive_seat_code="9999",
         trade_id=trade_id,
         side_contract="test",
     )
@@ -85,11 +85,12 @@ def test_phase_zero_report_combines_tape_book_and_identity_coverage() -> None:
         (
             IdentityRecord(
                 "0101",
+                "Seat 0101",
+                "0101",
+                "broker-alpha",
                 "Alpha Securities Limited",
                 "Alpha",
-                "P1",
-                "Alpha Securities Limited",
-                "Alpha",
+                (),
                 0.5,
                 date(2020, 1, 1),
             ),
@@ -120,9 +121,8 @@ def test_phase_zero_report_combines_tape_book_and_identity_coverage() -> None:
     assert row.session_duration_complete
     assert row.combined_complete
     assert row.max_book_gap_seconds == pytest.approx(5.0)
-    assert row.active_broker_disclosure_coverage == pytest.approx(1.0)
-    assert row.broker_mapping_coverage == pytest.approx(0.75)
-    assert row.participant_mapping_coverage == pytest.approx(0.75)
+    assert row.active_seat_disclosure_coverage == pytest.approx(1.0)
+    assert row.broker_entity_mapping_coverage == pytest.approx(0.75)
 
 
 def test_missing_l2_or_incomplete_sequence_blocks_combined_coverage() -> None:

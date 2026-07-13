@@ -27,7 +27,7 @@ The real replay CLI now writes `data_quality_report.csv`, one row per symbol, wi
 - rejected crossed/locked and other invalid L2 snapshots;
 - directional and neutral turnover;
 - active-broker disclosure coverage;
-- broker and participant mapping coverage;
+- active-seat disclosure and broker-entity mapping coverage;
 - an explicit failed row for every expected symbol, including symbols with zero accepted events;
 - tape, book and combined completeness;
 - source and direction-contract provenance.

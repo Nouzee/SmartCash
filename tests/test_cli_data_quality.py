@@ -50,7 +50,14 @@ def test_tape_audit_detects_file_order_duplicates_and_sequence_gaps(tmp_path) ->
 
     events, audit, _book_audit = load_events(path, DirectionConvention.VENDOR_DOC)
 
-    assert [event.event_ts for event in events] == sorted(event.event_ts for event in events)
+    assert [event.event_ts for event in events] == [
+        datetime.fromtimestamp(1_767_576_602, tz=timezone.utc),
+        datetime.fromtimestamp(1_767_576_601, tz=timezone.utc),
+    ]
+    assert [event.captured_at for event in events] == [
+        datetime.fromtimestamp(1_767_576_602, tz=timezone.utc),
+        datetime.fromtimestamp(1_767_576_601, tz=timezone.utc),
+    ]
     assert audit.out_of_order_count == 1
     assert audit.duplicate_trade_id_count == 1
     assert audit.sequence_gap_count == 1
@@ -153,7 +160,7 @@ def test_real_replay_cli_writes_phase_zero_quality_report(tmp_path, monkeypatch)
     assert manifest["capture_window_complete"] is False
     assert manifest["coverage_complete"] is False
     assert manifest["data_quality_rows"] == 1
-    assert "active_broker_disclosure_coverage" in quality
+    assert "active_seat_disclosure_coverage" in quality
     assert "00700.HK" in quality
     assert not (output_dir / "feature_snapshots.csv").exists()
 

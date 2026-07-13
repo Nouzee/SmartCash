@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime, timedelta
 from math import tanh
@@ -8,12 +7,18 @@ from statistics import pstdev
 
 from .contracts import (
     AggressorSide,
+    BrokerEntityContribution,
     BookSnapshotEvent,
+    DecisionState,
+    ExecutionState,
     FeatureSnapshot,
     FlowPriceState,
     FlowWindowFeatures,
-    IdentityContribution,
+    SeatIdentityContribution,
+    MicrostructureStepSnapshot,
+    SNAPSHOT_SCHEMA_VERSION,
     SessionContext,
+    SourceWatermark,
     TradeEvent,
 )
 from .identity import IdentityRecord, IdentityRegistry
@@ -42,7 +47,7 @@ def _range_position(value: float, low: float, high: float) -> float:
     return (value - low) / (high - low) if high > low else 0.0
 
 
-class SmartMoneyEngine:
+class SmartCashEngine:
     """In-memory causal state for research replay and shadow evaluation."""
 
     def __init__(self, *, identity_registry: IdentityRegistry | None = None) -> None:
@@ -56,57 +61,94 @@ class SmartMoneyEngine:
 
     def ingest(self, event: BookSnapshotEvent | TradeEvent) -> None:
         if isinstance(event, BookSnapshotEvent):
-            books = self._books[event.symbol]
-            if books and event.event_ts < books[-1].event_ts:
-                raise ValueError("book events must be non-decreasing per symbol")
-            books.append(event)
+            self._books[event.symbol].append(event)
         elif isinstance(event, TradeEvent):
-            trades = self._trades[event.symbol]
-            if trades and event.event_ts < trades[-1].event_ts:
-                raise ValueError("trade events must be non-decreasing per symbol")
-            trades.append(event)
+            self._trades[event.symbol].append(event)
 
     def _flow(self, symbol: str, as_of: datetime, seconds: int) -> FlowWindowFeatures:
         start = as_of - timedelta(seconds=seconds)
-        trades = [trade for trade in self._trades.get(symbol, ()) if start < trade.event_ts <= as_of]
+        trades = [
+            trade
+            for trade in self._trades.get(symbol, ())
+            if trade.captured_at <= as_of and start < trade.event_ts <= as_of
+        ]
         buy = sum(trade.turnover for trade in trades if trade.aggressor_side is AggressorSide.BUY)
         sell = sum(trade.turnover for trade in trades if trade.aggressor_side is AggressorSide.SELL)
         neutral = sum(trade.turnover for trade in trades if trade.aggressor_side is AggressorSide.NEUTRAL)
         directional = buy + sell
         total = directional + neutral
-        broker_net: dict[str, float] = defaultdict(float)
-        participant_net: dict[str, float] = defaultdict(float)
-        identities: dict[str, IdentityRecord] = {}
-        mapped_broker_turnover = 0.0
-        mapped_participant_turnover = 0.0
+        seat_net: dict[str, float] = defaultdict(float)
+        broker_entity_net: dict[str, float] = defaultdict(float)
+        identities_by_seat: dict[str, IdentityRecord] = {}
+        identities_by_broker_entity: dict[str, IdentityRecord] = {}
+        disclosed_seat_turnover = 0.0
+        mapped_broker_entity_turnover = 0.0
         skill_numerator = 0.0
         for trade in trades:
             if trade.aggressor_side is AggressorSide.NEUTRAL:
                 continue
-            identity = self._identity_registry.resolve(trade.active_broker_code, trade.event_ts.date())
+            seat_code = trade.active_seat_code
+            if seat_code:
+                signed = trade.aggressor_side.sign * trade.turnover
+                seat_net[seat_code] += signed
+                disclosed_seat_turnover += trade.turnover
+            identity = self._identity_registry.resolve_seat(seat_code, trade.event_ts.date())
             if identity is None:
                 continue
             signed = trade.aggressor_side.sign * trade.turnover
-            identities[identity.broker_code] = identity
-            broker_net[identity.broker_code] += signed
-            mapped_broker_turnover += trade.turnover
+            identities_by_seat[identity.seat_code] = identity
+            identities_by_broker_entity[identity.broker_entity_id] = identity
+            broker_entity_net[identity.broker_entity_id] += signed
+            mapped_broker_entity_turnover += trade.turnover
             skill_numerator += identity.skill_score * signed
-            if identity.participant_id:
-                participant_net[identity.participant_id] += signed
-                mapped_participant_turnover += trade.turnover
-        ranked = sorted(broker_net, key=lambda code: abs(broker_net[code]), reverse=True)
-        top_brokers = tuple(
-            IdentityContribution(
-                broker_code=code,
-                broker_full_name=identities[code].broker_full_name,
-                broker_display_name=identities[code].broker_display_name,
-                participant_id=identities[code].participant_id,
-                participant_full_name=identities[code].participant_full_name,
-                participant_display_name=identities[code].participant_display_name,
-                net_turnover=broker_net[code],
-                skill_score=identities[code].skill_score,
+        ranked_seats = sorted(seat_net, key=lambda code: abs(seat_net[code]), reverse=True)
+        ranked_broker_entities = sorted(
+            broker_entity_net,
+            key=lambda entity_id: abs(broker_entity_net[entity_id]),
+            reverse=True,
+        )
+        top_seats = tuple(
+            SeatIdentityContribution(
+                seat_code=code,
+                seat_full_name=(
+                    identities_by_seat[code].seat_full_name if code in identities_by_seat else ""
+                ),
+                seat_display_name=(
+                    identities_by_seat[code].seat_display_name
+                    if code in identities_by_seat
+                    else code
+                ),
+                broker_entity_id=(
+                    identities_by_seat[code].broker_entity_id if code in identities_by_seat else ""
+                ),
+                broker_entity_full_name=(
+                    identities_by_seat[code].broker_entity_full_name
+                    if code in identities_by_seat
+                    else ""
+                ),
+                broker_entity_display_name=(
+                    identities_by_seat[code].broker_entity_display_name
+                    if code in identities_by_seat
+                    else ""
+                ),
+                net_turnover=seat_net[code],
+                skill_score=(identities_by_seat[code].skill_score if code in identities_by_seat else 0.0),
             )
-            for code in ranked[:3]
+            for code in ranked_seats[:3]
+        )
+        top_broker_entities = tuple(
+            BrokerEntityContribution(
+                broker_entity_id=entity_id,
+                broker_entity_full_name=identities_by_broker_entity[
+                    entity_id
+                ].broker_entity_full_name,
+                broker_entity_display_name=identities_by_broker_entity[
+                    entity_id
+                ].broker_entity_display_name,
+                net_turnover=broker_entity_net[entity_id],
+                skill_score=identities_by_broker_entity[entity_id].skill_score,
+            )
+            for entity_id in ranked_broker_entities[:3]
         )
         return FlowWindowFeatures(
             window_seconds=seconds,
@@ -116,17 +158,35 @@ class SmartMoneyEngine:
             directional_flow_ratio=buy / directional if directional else 0.5,
             signed_flow_ratio=(buy - sell) / directional if directional else 0.0,
             neutral_share=neutral / total if total else 0.0,
-            broker_mapping_coverage=mapped_broker_turnover / directional if directional else 0.0,
-            participant_mapping_coverage=mapped_participant_turnover / directional if directional else 0.0,
+            seat_identity_coverage=disclosed_seat_turnover / directional if directional else 0.0,
+            broker_entity_mapping_coverage=(
+                mapped_broker_entity_turnover / directional if directional else 0.0
+            ),
             skill_weighted_flow=skill_numerator / directional if directional else 0.0,
-            top_broker_net_concentration=abs(broker_net[ranked[0]]) / directional if ranked and directional else 0.0,
-            top_participant_net_concentration=max(map(abs, participant_net.values()), default=0.0) / directional if directional else 0.0,
-            top_brokers=top_brokers,
+            top_seat_net_concentration=(
+                abs(seat_net[ranked_seats[0]]) / directional
+                if ranked_seats and directional
+                else 0.0
+            ),
+            top_broker_entity_net_concentration=(
+                abs(broker_entity_net[ranked_broker_entities[0]]) / directional
+                if ranked_broker_entities and directional
+                else 0.0
+            ),
+            top_seats=top_seats,
+            top_broker_entities=top_broker_entities,
         )
 
     def snapshot(self, symbol: str, as_of: datetime) -> FeatureSnapshot:
-        books = self._books.get(symbol, [])
-        index = bisect_right([book.event_ts for book in books], as_of) - 1
+        books = sorted(
+            (
+                book
+                for book in self._books.get(symbol, ())
+                if book.captured_at <= as_of and book.event_ts <= as_of
+            ),
+            key=lambda book: (book.event_ts, book.captured_at),
+        )
+        index = len(books) - 1
         if index < 0:
             raise LookupError(f"no l2 book at or before {as_of.isoformat()} for {symbol}")
         book = books[index]
@@ -161,7 +221,10 @@ class SmartMoneyEngine:
         complete_60s = session_coverage_ready and elapsed_from_open >= timedelta(seconds=60)
         complete_300s = session_coverage_ready and elapsed_from_open >= timedelta(seconds=300)
         complete = complete_300s
-        mapping_confidence = min(flow_60s.broker_mapping_coverage, flow_60s.participant_mapping_coverage)
+        mapping_confidence = min(
+            flow_60s.seat_identity_coverage,
+            flow_60s.broker_entity_mapping_coverage,
+        )
         freshness_seconds = max(0.0, (as_of - book.event_ts).total_seconds())
         freshness_confidence = max(0.0, 1.0 - freshness_seconds / 10.0)
         confidence = min(mapping_confidence, freshness_confidence) if complete else 0.0
@@ -259,3 +322,46 @@ class SmartMoneyEngine:
                 and liquidity_stress < 1.0
             ),
         )
+
+    def step_snapshot(self, symbol: str, as_of: datetime) -> MicrostructureStepSnapshot:
+        feature = self.snapshot(symbol, as_of)
+        visible_books = [
+            book for book in self._books.get(symbol, ()) if book.captured_at <= as_of
+        ]
+        if not visible_books:
+            raise LookupError(f"no causally visible l2 book at or before {as_of.isoformat()} for {symbol}")
+        book = max(visible_books, key=lambda candidate: (candidate.event_ts, candidate.captured_at))
+        visible_trades = [
+            trade for trade in self._trades.get(symbol, ()) if trade.captured_at <= as_of
+        ]
+        trade = (
+            max(visible_trades, key=lambda candidate: (candidate.event_ts, candidate.captured_at))
+            if visible_trades
+            else None
+        )
+        execution_state = ExecutionState(
+            book_event_ts=book.event_ts,
+            book_captured_at=book.captured_at,
+            bids=book.bids,
+            asks=book.asks,
+            last_trade=trade,
+        )
+        watermark = SourceWatermark(
+            book_event_ts=book.event_ts,
+            book_captured_at=book.captured_at,
+            trade_event_ts=trade.event_ts if trade else None,
+            trade_captured_at=trade.captured_at if trade else None,
+            trade_id=trade.trade_id if trade else "",
+        )
+        return MicrostructureStepSnapshot(
+            schema_version=SNAPSHOT_SCHEMA_VERSION,
+            symbol=symbol,
+            as_of=as_of,
+            decision_state=DecisionState(feature=feature),
+            execution_state=execution_state,
+            source_watermark=watermark,
+            complete=feature.complete,
+        )
+
+
+SmartMoneyEngine = SmartCashEngine
