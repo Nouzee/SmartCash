@@ -1,6 +1,6 @@
 import csv
 
-from smart_money.demo import run_demo
+from smartcash.demo import run_demo
 
 
 def test_demo_keeps_realtime_features_and_future_labels_separate(tmp_path) -> None:

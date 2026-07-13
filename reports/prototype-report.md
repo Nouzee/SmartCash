@@ -4,7 +4,7 @@ Date: 2026-07-13
 
 ## Outcome
 
-An independent high-frequency research project now exists at `/home/zrliu/smart-money`. It is event-driven, uses XTQuant `hktransaction` plus `l2thousand`, and keeps realtime features separate from future outcomes.
+An independent high-frequency research project now exists at `/home/zrliu/smartcash`. It is event-driven, uses XTQuant `hktransaction` plus `l2thousand`, and keeps realtime features separate from future outcomes.
 
 The prototype includes:
 

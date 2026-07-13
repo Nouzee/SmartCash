@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from smart_money.contracts import AggressorSide
-from smart_money.xtquant import DirectionConvention, normalize_hktransaction
+from smartcash.contracts import AggressorSide
+from smartcash.xtquant import DirectionConvention, normalize_hktransaction
 
 
 def test_vendor_direction_and_active_identity_are_explicit() -> None:

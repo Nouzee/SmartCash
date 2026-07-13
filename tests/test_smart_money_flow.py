@@ -2,15 +2,15 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from smart_money.contracts import (
+from smartcash.contracts import (
     AggressorSide,
     BookLevel,
     BookSnapshotEvent,
     SessionContext,
     TradeEvent,
 )
-from smart_money.engine import SmartMoneyEngine
-from smart_money.identity import IdentityRecord, IdentityRegistry
+from smartcash.engine import SmartMoneyEngine
+from smartcash.identity import IdentityRecord, IdentityRegistry
 
 
 BASE = datetime.fromisoformat("2026-01-05T10:00:00+08:00")

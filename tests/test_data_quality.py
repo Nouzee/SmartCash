@@ -2,8 +2,8 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from smart_money.contracts import AggressorSide, BookLevel, BookSnapshotEvent, TradeEvent
-from smart_money.data_quality import (
+from smartcash.contracts import AggressorSide, BookLevel, BookSnapshotEvent, TradeEvent
+from smartcash.data_quality import (
     BookInputAuditor,
     SymbolTradeCaptureAudit,
     TapeAuditor,
@@ -11,7 +11,7 @@ from smart_money.data_quality import (
     build_data_quality_rows,
     expected_hk_active_session_seconds,
 )
-from smart_money.identity import IdentityRecord, IdentityRegistry
+from smartcash.identity import IdentityRecord, IdentityRegistry
 
 
 BASE = datetime.fromisoformat("2026-01-05T09:30:00+08:00")

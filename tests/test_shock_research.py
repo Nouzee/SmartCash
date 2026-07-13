@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from smart_money.shocks import (
+from smartcash.shocks import (
     MicrostructureObservation,
     ShockCategory,
     ShockDetector,

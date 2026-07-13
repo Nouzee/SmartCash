@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from smart_money.cli import (
+from smartcash.cli import (
     _positive_milliseconds,
     _prepare_output_dir,
     load_events,
@@ -13,7 +13,7 @@ from smart_money.cli import (
     load_trade_capture_evidence,
     main,
 )
-from smart_money.xtquant import DirectionConvention
+from smartcash.xtquant import DirectionConvention
 
 
 def write_jsonl(path, rows) -> None:

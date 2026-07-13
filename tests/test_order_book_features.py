@@ -2,8 +2,8 @@ from datetime import datetime
 
 import pytest
 
-from smart_money.contracts import BookLevel, BookSnapshotEvent
-from smart_money.engine import SmartMoneyEngine
+from smartcash.contracts import BookLevel, BookSnapshotEvent
+from smartcash.engine import SmartMoneyEngine
 
 
 def book(ts: str, *, bid_size: int, ask_size: int) -> BookSnapshotEvent:

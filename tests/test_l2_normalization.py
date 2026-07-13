@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from smart_money.xtquant import normalize_l2thousand
+from smartcash.xtquant import normalize_l2thousand
 
 
 def test_l2thousand_arrays_become_valid_full_snapshot() -> None:

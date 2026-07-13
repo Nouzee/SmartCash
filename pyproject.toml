@@ -3,14 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "smart-money-microstructure"
+name = "smartcash"
 version = "0.1.0"
-description = "Causal HK market-microstructure smart-money research engine"
+description = "Causal HK market-microstructure research and execution engine"
 requires-python = ">=3.11"
 
 [project.scripts]
-smart-money-demo = "smart_money.demo:main"
-smart-money-replay = "smart_money.cli:main"
+smartcash-demo = "smartcash.demo:main"
+smartcash-replay = "smartcash.cli:main"
 
 [project.optional-dependencies]
 research = ["numpy>=1.26", "pandas>=2.1", "matplotlib>=3.8"]

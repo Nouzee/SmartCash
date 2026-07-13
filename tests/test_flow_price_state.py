@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 
-from smart_money.contracts import (
+from smartcash.contracts import (
     AggressorSide,
     BookLevel,
     BookSnapshotEvent,
@@ -8,8 +8,8 @@ from smart_money.contracts import (
     SessionContext,
     TradeEvent,
 )
-from smart_money.engine import SmartMoneyEngine
-from smart_money.identity import IdentityRecord, IdentityRegistry
+from smartcash.engine import SmartMoneyEngine
+from smartcash.identity import IdentityRecord, IdentityRegistry
 
 
 BASE = datetime.fromisoformat("2026-01-05T09:30:00+08:00")
