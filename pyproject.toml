@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-money-microstructure"
+version = "0.1.0"
+description = "Causal HK market-microstructure smart-money research engine"
+requires-python = ">=3.11"
+
+[project.scripts]
+smart-money-demo = "smart_money.demo:main"
+smart-money-replay = "smart_money.cli:main"
+
+[project.optional-dependencies]
+research = ["numpy>=1.26", "pandas>=2.1", "matplotlib>=3.8"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

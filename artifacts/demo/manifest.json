@@ -1,0 +1,10 @@
+{
+  "dataset_mode": "synthetic_demo",
+  "empirical_claims_allowed": false,
+  "seed": 7,
+  "duration_seconds": 720,
+  "feature_rows": 74,
+  "label_rows": 296,
+  "shock_events": 1,
+  "shock_outcomes": 1
+}

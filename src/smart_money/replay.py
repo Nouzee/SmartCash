@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Sequence
+
+from .contracts import BookSnapshotEvent, FeatureSnapshot, TradeEvent
+from .engine import SmartMoneyEngine
+
+MarketEvent = BookSnapshotEvent | TradeEvent
+
+
+class ReplayRunner:
+    """Deterministic event-time replay; no wall-clock or future-data access."""
+
+    def __init__(self, engine: SmartMoneyEngine) -> None:
+        self.engine = engine
+
+    def run(
+        self,
+        events: Sequence[MarketEvent],
+        *,
+        snapshot_times: Sequence[datetime],
+    ) -> tuple[FeatureSnapshot, ...]:
+        ordered_events = list(events)
+        if any(current.event_ts < previous.event_ts for previous, current in zip(ordered_events, ordered_events[1:], strict=False)):
+            raise ValueError("replay events must be non-decreasing by event_ts")
+        ordered_times = tuple(snapshot_times)
+        if any(current <= previous for previous, current in zip(ordered_times, ordered_times[1:], strict=False)):
+            raise ValueError("snapshot_times must be strictly increasing")
+        cursor = 0
+        active_symbols: set[str] = set()
+        features: list[FeatureSnapshot] = []
+        for snapshot_ts in ordered_times:
+            while cursor < len(ordered_events) and ordered_events[cursor].event_ts <= snapshot_ts:
+                event = ordered_events[cursor]
+                self.engine.ingest(event)
+                active_symbols.add(event.symbol)
+                cursor += 1
+            for symbol in sorted(active_symbols):
+                try:
+                    features.append(self.engine.snapshot(symbol, snapshot_ts))
+                except LookupError:
+                    continue
+        return tuple(features)
+
+
+@dataclass(frozen=True, slots=True)
+class MarkoutLabel:
+    symbol: str
+    signal_ts: datetime
+    label_ts: datetime
+    horizon_seconds: int
+    direction: int
+    raw_mid_return: float
+    signed_markout: float
+
+
+class MarkoutLabeler:
+    """Offline-only future midpoint labels for frozen feature snapshots."""
+
+    def __init__(self, *, horizons_seconds: tuple[int, ...] = (10, 30, 60, 300)) -> None:
+        if not horizons_seconds or any(horizon <= 0 for horizon in horizons_seconds):
+            raise ValueError("markout horizons must be positive")
+        self.horizons_seconds = tuple(sorted(set(horizons_seconds)))
+
+    def label(
+        self,
+        feature: FeatureSnapshot,
+        books: Sequence[BookSnapshotEvent],
+    ) -> tuple[MarkoutLabel, ...]:
+        symbol_books = sorted(
+            (book for book in books if book.symbol == feature.symbol and book.event_ts >= feature.as_of),
+            key=lambda book: book.event_ts,
+        )
+        direction = 1 if feature.smart_money_score > 0 else -1 if feature.smart_money_score < 0 else 0
+        labels: list[MarkoutLabel] = []
+        for horizon in self.horizons_seconds:
+            target = feature.as_of + timedelta(seconds=horizon)
+            future = next((book for book in symbol_books if book.event_ts >= target), None)
+            if future is None:
+                continue
+            future_mid = (future.bids[0].price + future.asks[0].price) / 2
+            raw_return = future_mid / feature.mid_price - 1
+            labels.append(
+                MarkoutLabel(
+                    symbol=feature.symbol,
+                    signal_ts=feature.as_of,
+                    label_ts=future.event_ts,
+                    horizon_seconds=horizon,
+                    direction=direction,
+                    raw_mid_return=raw_return,
+                    signed_markout=direction * raw_return,
+                )
+            )
+        return tuple(labels)

@@ -1,0 +1,74 @@
+from datetime import datetime, timedelta
+
+import pytest
+
+from smart_money.contracts import AggressorSide, BookLevel, BookSnapshotEvent, SessionContext, TradeEvent
+from smart_money.engine import SmartMoneyEngine
+from smart_money.identity import IdentityRecord, IdentityRegistry
+from smart_money.replay import MarkoutLabeler, ReplayRunner
+
+
+BASE = datetime.fromisoformat("2026-01-05T09:30:00+08:00")
+
+
+def book(seconds: int, bid: float, ask: float, bid_size: int = 100, ask_size: int = 100) -> BookSnapshotEvent:
+    return BookSnapshotEvent(
+        symbol="00700.HK",
+        event_ts=BASE + timedelta(seconds=seconds),
+        bids=(BookLevel(bid, bid_size),),
+        asks=(BookLevel(ask, ask_size),),
+        source="xtquant.l2thousand",
+    )
+
+
+def test_future_events_do_not_change_past_replay_snapshot() -> None:
+    identity = IdentityRecord(
+        broker_code="0101",
+        broker_full_name="Alpha Limited",
+        broker_display_name="Alpha",
+        participant_id="P1",
+        participant_full_name="Alpha Limited",
+        participant_display_name="Alpha",
+        skill_score=1.0,
+        effective_from=BASE.date(),
+    )
+
+    def run(events):
+        engine = SmartMoneyEngine(identity_registry=IdentityRegistry((identity,)))
+        engine.set_session(SessionContext(BASE.date(), BASE, BASE, True))
+        return ReplayRunner(engine).run(events, snapshot_times=(BASE + timedelta(seconds=2),))[0]
+
+    trade = TradeEvent(
+        symbol="00700.HK",
+        event_ts=BASE + timedelta(seconds=1),
+        price=100.1,
+        volume=1_000,
+        turnover=100_100,
+        aggressor_side=AggressorSide.BUY,
+        active_broker_code="0101",
+        passive_broker_code="9999",
+        trade_id="1",
+        side_contract="canonical",
+    )
+    causal = [book(0, 100.0, 100.2), trade, book(2, 100.1, 100.3, 200, 50)]
+    future = book(20, 99.0, 99.2)
+
+    assert run(causal) == run(causal + [future])
+
+
+def test_markout_is_a_separate_future_label() -> None:
+    engine = SmartMoneyEngine()
+    engine.set_session(SessionContext(BASE.date(), BASE, BASE, True))
+    feature = ReplayRunner(engine).run(
+        [book(0, 100.0, 100.2), book(2, 100.1, 100.3, 200, 50)],
+        snapshot_times=(BASE + timedelta(seconds=2),),
+    )[0]
+    future_books = [book(2, 100.1, 100.3), book(12, 100.4, 100.6)]
+
+    label = MarkoutLabeler(horizons_seconds=(10,)).label(feature, future_books)[0]
+
+    assert label.horizon_seconds == 10
+    assert label.raw_mid_return == pytest.approx(100.5 / 100.2 - 1)
+    assert label.direction == 1
+    assert label.signed_markout == pytest.approx(label.raw_mid_return)
+    assert label.label_ts == BASE + timedelta(seconds=12)
