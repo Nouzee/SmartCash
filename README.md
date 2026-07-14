@@ -215,6 +215,25 @@ Phase 0 当前验收与真实数据阻塞见 [2026-07-13 数据验收报告](rep
 
 尚未完成独立方向核验时，运行同一命令但去掉 `--side-verification-file`，加入 `--quality-only`。该模式只落盘 manifest 与 `data_quality_report.csv`，不会生成 signed-flow 因子或未来标签。
 
+## 历史归档回测
+
+对冻结的 Vault Octopus-Live 历史归档，使用 `historical_archive_backtest`。该模式要求同一标的同时具有 `hktransaction` 和 `l2thousand`，并把 exporter 输出的 `octopus-export-summary.json` 与 JSONL 哈希绑定；还必须提供 Vault/Beast lineage manifest，并校验其与 summary 的源快照、导出哈希一致。回放时采用交易所事件时间，而不是文件保存时间。它不要求实时订阅 ACK、心跳或掉数账本，但 manifest 会明确禁止实时和可执行性结论。
+
+```bash
+PYTHONPATH=src /opt/conda/envs/research/bin/python -m smartcash.cli \
+  --events-jsonl /path/to/vault-export.jsonl \
+  --historical-source-summary /path/to/octopus-export-summary.json \
+  --vault-beast-manifest /path/to/vault-beast-manifest.json \
+  --output-dir artifacts/archive-backtest \
+  --dataset-mode historical_archive_backtest \
+  --direction-convention xtquant_vendor_doc_dir_1_sell_2_buy \
+  --expected-open 2026-01-08T09:30:00+08:00 \
+  --expected-end 2026-01-08T16:00:00+08:00 \
+  --expected-symbol 00700.HK \
+  --session-start 2026-01-08T09:30:00+08:00 \
+  --side-verification-file /path/to/side-verification.json
+```
+
 ## 测试
 
 ```bash

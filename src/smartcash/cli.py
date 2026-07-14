@@ -4,6 +4,7 @@ import argparse
 import csv
 import hashlib
 import json
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -272,6 +273,98 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _historical_archive_events(events: list[MarketEvent]) -> list[MarketEvent]:
+    """Replay an archive on its exchange-event clock, never as live arrival evidence."""
+
+    return sorted(
+        (replace(event, captured_at=event.event_ts) for event in events),
+        key=_historical_archive_event_sort_key,
+    )
+
+
+def _historical_archive_event_sort_key(event: MarketEvent) -> tuple[object, ...]:
+    """Use a documented deterministic ordering for equal exchange timestamps."""
+
+    if isinstance(event, BookSnapshotEvent):
+        return (
+            event.event_ts,
+            0,
+            event.symbol,
+            event.source,
+            tuple((level.price, level.size, level.order_count) for level in event.bids),
+            tuple((level.price, level.size, level.order_count) for level in event.asks),
+        )
+    return (event.event_ts, 1, event.symbol, event.source, event.trade_id)
+
+
+def load_historical_source_summary(
+    path: Path,
+    *,
+    events_sha256: str,
+    expected_open: datetime,
+    expected_symbols: tuple[str, ...],
+) -> dict[str, object]:
+    """Bind an event-time archive replay to its immutable Vault export summary."""
+
+    content = path.read_bytes()
+    try:
+        summary = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("historical source summary must be UTF-8 JSON") from error
+    if not isinstance(summary, dict):
+        raise ValueError("historical source summary must be an object")
+    if summary.get("dataset_mode") != "vault_octopus_live_export":
+        raise ValueError("historical source summary must describe a Vault Octopus-Live export")
+    if summary.get("trade_date") != expected_open.date().isoformat():
+        raise ValueError("historical source summary trade date does not match expected_open")
+    if summary.get("vault_export_sha256") != events_sha256:
+        raise ValueError("historical source summary is not bound to this events file")
+    if set(map(str, summary.get("expected_symbols") or ())) != set(expected_symbols):
+        raise ValueError("historical source summary symbols do not match the replay universe")
+    source_snapshot_sha256 = str(summary.get("source_snapshot_sha256") or "")
+    if len(source_snapshot_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in source_snapshot_sha256.lower()
+    ):
+        raise ValueError("historical source summary requires source_snapshot_sha256")
+    return {
+        "summary_sha256": hashlib.sha256(content).hexdigest(),
+        "source_snapshot_sha256": source_snapshot_sha256.lower(),
+        "vault_export_sha256": events_sha256,
+        "trade_date": str(summary["trade_date"]),
+        "expected_symbols": sorted(map(str, summary["expected_symbols"])),
+    }
+
+
+def _validate_historical_archive_lineage(
+    *,
+    historical_source_summary: dict[str, object] | None,
+    vault_beast_manifest: Any | None,
+) -> None:
+    """Require canonical Vault/Beast provenance even for quality-only archive inspection."""
+
+    if historical_source_summary is None:
+        raise ValueError("historical archive backtest requires --historical-source-summary")
+    if vault_beast_manifest is None:
+        raise ValueError("historical archive backtest requires --vault-beast-manifest")
+    if historical_source_summary["vault_export_sha256"] != vault_beast_manifest.vault.export_sha256:
+        raise ValueError("historical source summary export hash does not match Vault/Beast lineage")
+    if (
+        historical_source_summary["source_snapshot_sha256"]
+        != vault_beast_manifest.vault.content_sha256
+    ):
+        raise ValueError("historical source summary snapshot hash does not match Vault/Beast lineage")
+
+
+def _archive_disclaimers(historical_archive_backtest: bool) -> dict[str, object]:
+    if not historical_archive_backtest:
+        return {}
+    return {
+        "live_claims_allowed": False,
+        "executable_claims_allowed": False,
+        "event_time_tie_break": "book_then_trade; symbol; source; payload_or_trade_id",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Replay XTQuant HK trades and L2 snapshots into causal SmartCash features"
@@ -292,7 +385,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--dataset-mode",
-        choices=("historical_replay", "live_session_capture"),
+        choices=("historical_replay", "historical_archive_backtest", "live_session_capture"),
         required=True,
     )
     parser.add_argument(
@@ -303,6 +396,7 @@ def main() -> None:
     parser.add_argument("--max-book-gap-seconds", type=float, default=5.0)
     parser.add_argument("--max-arrival-latency-ms", type=float, default=1_000.0)
     parser.add_argument("--trade-capture-evidence-file", type=Path)
+    parser.add_argument("--historical-source-summary", type=Path)
     parser.add_argument("--side-verification-file", type=Path)
     parser.add_argument(
         "--quality-only",
@@ -387,7 +481,23 @@ def main() -> None:
         and quality_rows
         and all(row.combined_complete for row in quality_rows)
     )
-    replayed = args.dataset_mode == "historical_replay"
+    historical_archive_backtest = args.dataset_mode == "historical_archive_backtest"
+    replayed = args.dataset_mode in {"historical_replay", "historical_archive_backtest"}
+    historical_source_summary = (
+        load_historical_source_summary(
+            args.historical_source_summary,
+            events_sha256=events_sha256,
+            expected_open=expected_open,
+            expected_symbols=tuple(args.expected_symbol),
+        )
+        if historical_archive_backtest and args.historical_source_summary is not None
+        else None
+    )
+    if historical_archive_backtest:
+        _validate_historical_archive_lineage(
+            historical_source_summary=historical_source_summary,
+            vault_beast_manifest=vault_beast_manifest,
+        )
     write_csv(args.output_dir / "data_quality_report.csv", [row.to_row() for row in quality_rows])
     side_verification = (
         load_side_verification(args.side_verification_file, direction_convention)
@@ -409,6 +519,11 @@ def main() -> None:
             "coverage_claimed": args.coverage_complete,
             "capture_window_complete": capture_window_complete,
             "coverage_complete": coverage_complete,
+            "historical_backtest_allowed": historical_archive_backtest,
+            "realtime_capture_evidence_required": not historical_archive_backtest,
+            "replay_clock": "event_time_assumed" if historical_archive_backtest else "captured_at",
+            **_archive_disclaimers(historical_archive_backtest),
+            "historical_source_summary": historical_source_summary,
             "expected_symbols": args.expected_symbol,
             "trade_capture_evidence_file": (
                 str(args.trade_capture_evidence_file)
@@ -438,12 +553,19 @@ def main() -> None:
         return
     if side_verification is None:
         raise ValueError("factor replay requires an independent side verification artifact")
-    if not coverage_complete:
+    if not historical_archive_backtest and not coverage_complete:
         raise ValueError(
             "factor replay requires --coverage-complete and every expected symbol to pass coverage"
         )
     if args.dataset_mode == "historical_replay" and vault_beast_manifest is None:
         raise ValueError("historical factor replay requires a Vault/Beast lineage manifest")
+    if historical_archive_backtest and not all(
+        row.trade_count and row.book_count for row in quality_rows
+    ):
+        raise ValueError(
+            "historical archive backtest requires at least one valid trade and L2 book per expected symbol"
+        )
+    replay_events = _historical_archive_events(events) if historical_archive_backtest else events
     engine = SmartCashEngine(identity_registry=registry)
     engine.set_session(
         SessionContext(
@@ -454,19 +576,19 @@ def main() -> None:
             coverage_complete,
         )
     )
-    first = events[0].event_ts
-    last = events[-1].event_ts
+    first = replay_events[0].event_ts
+    last = replay_events[-1].event_ts
     step = timedelta(milliseconds=args.snapshot_milliseconds)
     snapshot_times = []
     current = first
     while current <= last:
         snapshot_times.append(current)
         current += step
-    features = ReplayRunner(engine).run(events, snapshot_times=tuple(snapshot_times))
-    books = [event for event in events if isinstance(event, BookSnapshotEvent)]
+    features = ReplayRunner(engine).run(replay_events, snapshot_times=tuple(snapshot_times))
+    books = [event for event in replay_events if isinstance(event, BookSnapshotEvent)]
     labels = [label for feature in features for label in MarkoutLabeler().label(feature, books)]
     dataset_mode = args.dataset_mode
-    shock_events, shock_outcomes = shock_rows(events, dataset_mode=dataset_mode, features=features)
+    shock_events, shock_outcomes = shock_rows(replay_events, dataset_mode=dataset_mode, features=features)
     write_csv(
         args.output_dir / "feature_snapshots.csv",
         [feature_row(feature, dataset_mode=dataset_mode) for feature in features],
@@ -496,8 +618,16 @@ def main() -> None:
         "coverage_claimed": args.coverage_complete,
         "capture_window_complete": capture_window_complete,
         "coverage_complete": coverage_complete,
+        "historical_backtest_allowed": historical_archive_backtest,
+        "realtime_capture_evidence_required": not historical_archive_backtest,
+        "replay_clock": "event_time_assumed" if historical_archive_backtest else "captured_at",
+        "historical_source_summary": historical_source_summary,
         "expected_symbols": args.expected_symbol,
-        "trade_capture_evidence_file": str(args.trade_capture_evidence_file),
+        "trade_capture_evidence_file": (
+            str(args.trade_capture_evidence_file)
+            if args.trade_capture_evidence_file is not None
+            else None
+        ),
         "trade_capture_complete": all(row.trade_capture_complete for row in quality_rows),
         "required_active_session_seconds": quality_rows[0].active_session_seconds,
         "max_book_gap_seconds": max_book_gap,
@@ -514,6 +644,7 @@ def main() -> None:
         "vault_beast_lineage": (
             vault_beast_manifest.to_dict() if vault_beast_manifest is not None else None
         ),
+        **_archive_disclaimers(historical_archive_backtest),
     }
     with (args.output_dir / "manifest.json").open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)

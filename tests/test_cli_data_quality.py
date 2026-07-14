@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,11 @@ from smartcash.cli import (
     load_side_verification,
     load_trade_capture_evidence,
     main,
+)
+from smartcash.integrations.vault_beast import (
+    BeastTransformRef,
+    VaultBeastArtifactManifest,
+    VaultDatasetRef,
 )
 from smartcash.xtquant import DirectionConvention
 
@@ -36,6 +42,32 @@ def trade(seq: int, timestamp_ms: int, trade_id: str) -> dict[str, object]:
             "seq": seq,
         },
     }
+
+
+def write_archive_lineage(path, events_path, source_snapshot_sha256: str = "a" * 64) -> None:
+    """Write the immutable Vault/Beast lineage required for archive replays."""
+
+    artifact_sha256 = hashlib.sha256(events_path.read_bytes()).hexdigest()
+    manifest = VaultBeastArtifactManifest(
+        vault=VaultDatasetRef(
+            dataset_id="octopus-live-prod-20260105",
+            version="2026-01-05",
+            content_sha256=source_snapshot_sha256,
+            export_sha256=artifact_sha256,
+        ),
+        beast=BeastTransformRef(
+            script="beast_tools.smartcash.octopus_live",
+            commit="b" * 40,
+            config_sha256="c" * 64,
+        ),
+        artifact_sha256=artifact_sha256,
+        source_kinds=("hktransaction", "l2thousand"),
+        preserves_event_ts=True,
+        preserves_captured_at=True,
+        broker_queue_used=False,
+        captured_at_sources=("vault_file_mtime_ns",),
+    )
+    path.write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
 
 
 def test_tape_audit_detects_file_order_duplicates_and_sequence_gaps(tmp_path) -> None:
@@ -318,6 +350,159 @@ def test_factor_replay_rejects_incomplete_coverage_even_with_side_verification(
 
     assert (output_dir / "data_quality_report.csv").exists()
     assert not (output_dir / "feature_snapshots.csv").exists()
+
+
+def test_historical_archive_backtest_uses_event_time_without_live_capture_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    events_path = tmp_path / "events.jsonl"
+    output_dir = tmp_path / "output"
+    verification_path = tmp_path / "side-verification.json"
+    archive_summary_path = tmp_path / "octopus-export-summary.json"
+    archive_lineage_path = tmp_path / "vault-beast-manifest.json"
+    first_timestamp_ms = 1_767_576_601_000
+    second_timestamp_ms = first_timestamp_ms + 1_000
+    delayed_capture = "2026-01-05T16:00:00+08:00"
+    write_jsonl(
+        events_path,
+        [
+            trade(1, first_timestamp_ms, "1")
+            | {"captured_at": delayed_capture, "captured_at_source": "vault_file_mtime_ns"},
+            {
+                "kind": "l2thousand",
+                "symbol": "00700.HK",
+                "captured_at": delayed_capture,
+                "captured_at_source": "vault_file_mtime_ns",
+                "payload": {
+                    "time": first_timestamp_ms,
+                    "bidPrice": [399.8],
+                    "bidVolume": [10_000],
+                    "askPrice": [400.0],
+                    "askVolume": [8_000],
+                },
+            },
+            trade(2, second_timestamp_ms, "2")
+            | {"captured_at": delayed_capture, "captured_at_source": "vault_file_mtime_ns"},
+            {
+                "kind": "l2thousand",
+                "symbol": "00700.HK",
+                "captured_at": delayed_capture,
+                "captured_at_source": "vault_file_mtime_ns",
+                "payload": {
+                    "time": second_timestamp_ms,
+                    "bidPrice": [399.9],
+                    "bidVolume": [10_000],
+                    "askPrice": [400.1],
+                    "askVolume": [8_000],
+                },
+            },
+        ],
+    )
+    verification_path.write_text(
+        json.dumps(
+            {
+                "verified": True,
+                "verified_at": "2026-01-05T16:10:00+08:00",
+                "direction_convention": DirectionConvention.VENDOR_DOC.value,
+                "evidence": "XTQuant vendor direction specification",
+            }
+        ),
+        encoding="utf-8",
+    )
+    archive_summary_path.write_text(
+        json.dumps(
+            {
+                "dataset_mode": "vault_octopus_live_export",
+                "trade_date": "2026-01-05",
+                "expected_symbols": ["00700.HK"],
+                "vault_export_sha256": hashlib.sha256(events_path.read_bytes()).hexdigest(),
+                "source_snapshot_sha256": "a" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_archive_lineage(archive_lineage_path, events_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "smart-money",
+            "--events-jsonl", str(events_path),
+            "--output-dir", str(output_dir),
+            "--dataset-mode", "historical_archive_backtest",
+            "--direction-convention", DirectionConvention.VENDOR_DOC.value,
+            "--expected-open", "2026-01-05T09:30:00+08:00",
+            "--expected-end", "2026-01-05T16:00:00+08:00",
+            "--expected-symbol", "00700.HK",
+            "--session-start", "2026-01-05T09:30:00+08:00",
+            "--side-verification-file", str(verification_path),
+            "--historical-source-summary", str(archive_summary_path),
+            "--vault-beast-manifest", str(archive_lineage_path),
+        ],
+    )
+
+    main()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["historical_backtest_allowed"] is True
+    assert manifest["realtime_capture_evidence_required"] is False
+    assert manifest["live_claims_allowed"] is False
+    assert manifest["executable_claims_allowed"] is False
+    assert manifest["replay_clock"] == "event_time_assumed"
+    assert manifest["historical_source_summary"]["source_snapshot_sha256"] == "a" * 64
+    assert manifest["historical_source_summary"]["vault_export_sha256"] == hashlib.sha256(
+        events_path.read_bytes()
+    ).hexdigest()
+    assert manifest["vault_beast_lineage"]["vault"]["content_sha256"] == "a" * 64
+    assert manifest["features"] == 2
+
+
+def test_historical_archive_quality_only_requires_hash_bound_lineage(tmp_path, monkeypatch) -> None:
+    events_path = tmp_path / "events.jsonl"
+    output_dir = tmp_path / "output"
+    archive_summary_path = tmp_path / "octopus-export-summary.json"
+    write_jsonl(events_path, [])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "smart-money",
+            "--events-jsonl", str(events_path),
+            "--output-dir", str(output_dir),
+            "--dataset-mode", "historical_archive_backtest",
+            "--direction-convention", DirectionConvention.VENDOR_DOC.value,
+            "--expected-open", "2026-01-05T09:30:00+08:00",
+            "--expected-end", "2026-01-05T16:00:00+08:00",
+            "--expected-symbol", "00700.HK",
+            "--session-start", "2026-01-05T09:30:00+08:00",
+            "--quality-only",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="historical-source-summary"):
+        main()
+
+    assert not (output_dir / "manifest.json").exists()
+    archive_summary_path.write_text(
+        json.dumps(
+            {
+                "dataset_mode": "vault_octopus_live_export",
+                "trade_date": "2026-01-05",
+                "expected_symbols": ["00700.HK"],
+                "vault_export_sha256": hashlib.sha256(events_path.read_bytes()).hexdigest(),
+                "source_snapshot_sha256": "a" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        sys.argv + ["--historical-source-summary", str(archive_summary_path)],
+    )
+
+    with pytest.raises(ValueError, match="vault-beast-manifest"):
+        main()
 
 
 def test_side_verification_artifact_must_match_the_selected_contract(tmp_path) -> None:
