@@ -18,17 +18,20 @@ class VaultDatasetRef:
     dataset_id: str
     version: str
     content_sha256: str
+    export_sha256: str
 
     def __post_init__(self) -> None:
         if not self.dataset_id or not self.version:
             raise ValueError("Vault dataset_id and version are required")
         _require_sha256(self.content_sha256, "Vault content_sha256")
+        _require_sha256(self.export_sha256, "Vault export_sha256")
 
     def to_dict(self) -> dict[str, str]:
         return {
             "dataset_id": self.dataset_id,
             "version": self.version,
             "content_sha256": self.content_sha256,
+            "export_sha256": self.export_sha256,
         }
 
 
@@ -64,6 +67,7 @@ class VaultBeastArtifactManifest:
     preserves_event_ts: bool
     preserves_captured_at: bool
     broker_queue_used: bool
+    captured_at_sources: tuple[str, ...]
     schema_version: str = VAULT_BEAST_MANIFEST_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -79,6 +83,13 @@ class VaultBeastArtifactManifest:
             raise ValueError("broker_queue cannot be used by SmartCash data transforms")
         if not self.preserves_event_ts or not self.preserves_captured_at:
             raise ValueError("Vault/Beast artifact must preserve event_ts and captured_at")
+        if not self.captured_at_sources or any(
+            not isinstance(source, str) or not source.strip()
+            for source in self.captured_at_sources
+        ):
+            raise ValueError("captured_at_sources must contain explicit provenance")
+        if len(set(self.captured_at_sources)) != len(self.captured_at_sources):
+            raise ValueError("captured_at_sources must be unique")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -90,7 +101,14 @@ class VaultBeastArtifactManifest:
             "preserves_event_ts": self.preserves_event_ts,
             "preserves_captured_at": self.preserves_captured_at,
             "broker_queue_used": self.broker_queue_used,
+            "captured_at_sources": list(self.captured_at_sources),
         }
+
+    def validate_captured_at_sources(self, observed: set[str]) -> None:
+        if observed != set(self.captured_at_sources):
+            raise ValueError(
+                "events captured_at_source values do not match the Vault/Beast manifest"
+            )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "VaultBeastArtifactManifest":
@@ -103,11 +121,17 @@ class VaultBeastArtifactManifest:
             isinstance(value, str) for value in source_kinds
         ):
             raise ValueError("Vault/Beast source_kinds must be a list of strings")
+        captured_at_sources = payload.get("captured_at_sources")
+        if not isinstance(captured_at_sources, list) or not all(
+            isinstance(value, str) for value in captured_at_sources
+        ):
+            raise ValueError("Vault/Beast captured_at_sources must be a list of strings")
         return cls(
             vault=VaultDatasetRef(
                 dataset_id=str(vault.get("dataset_id") or ""),
                 version=str(vault.get("version") or ""),
                 content_sha256=str(vault.get("content_sha256") or ""),
+                export_sha256=str(vault.get("export_sha256") or ""),
             ),
             beast=BeastTransformRef(
                 script=str(beast.get("script") or ""),
@@ -119,6 +143,7 @@ class VaultBeastArtifactManifest:
             preserves_event_ts=payload.get("preserves_event_ts") is True,
             preserves_captured_at=payload.get("preserves_captured_at") is True,
             broker_queue_used=payload.get("broker_queue_used") is True,
+            captured_at_sources=tuple(captured_at_sources),
             schema_version=str(payload.get("schema_version") or ""),
         )
 

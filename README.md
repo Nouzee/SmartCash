@@ -178,11 +178,11 @@ PYTHONPATH=src /opt/conda/envs/research/bin/python -m smartcash.demo \
 JSONL 每行：
 
 ```json
-{"kind":"hktransaction","symbol":"00700.HK","captured_at":"2026-01-05T09:30:01.010+08:00","payload":{"time":1767576601000,"price":400.0,"volume":1000,"dir":2,"activeBrokerNo":101,"brokerNo":9999,"tradeID":"00700-1","seq":1}}
-{"kind":"l2thousand","symbol":"00700.HK","captured_at":"2026-01-05T09:30:01.012+08:00","payload":{"time":1767576601000,"bidPrice":[399.8],"bidVolume":[10000],"askPrice":[400.0],"askVolume":[8000]}}
+{"kind":"hktransaction","symbol":"00700.HK","captured_at":"2026-01-05T09:30:01.010+08:00","captured_at_source":"xtquant_callback","payload":{"time":1767576601000,"price":400.0,"volume":1000,"dir":2,"activeBrokerNo":101,"brokerNo":9999,"tradeID":"00700-1","seq":1}}
+{"kind":"l2thousand","symbol":"00700.HK","captured_at":"2026-01-05T09:30:01.012+08:00","captured_at_source":"xtquant_callback","payload":{"time":1767576601000,"bidPrice":[399.8],"bidVolume":[10000],"askPrice":[400.0],"askVolume":[8000]}}
 ```
 
-逐笔完整性不能由“文件里 sequence 连续”推断。采集器还要独立写出不可由 replay 补造的 capture evidence JSON：顶层固定 `source=xtquant.hktransaction`、`trade_date`，并以 `events_sha256` 绑定原始 JSONL；每个 expected symbol 记录真实 subscription ACK、`subscribed_at`、从开盘到收盘不超过 60 秒间隔的 monitor heartbeat，以及非负 JSON 整数 `dropped_callback_count`。午休不计 heartbeat gap。缺文件、哈希不匹配、缺股票、首尾不覆盖、乱序、gap 超限或丢包非零都会令该股票失败。
+逐笔完整性不能由“文件里 sequence 连续”推断。采集器还要独立写出不可由 replay 补造的 capture evidence JSON：顶层固定 `source=xtquant.hktransaction`、`trade_date`，并以 `events_sha256` 绑定原始 JSONL；每个 expected symbol 记录真实 subscription ACK、`subscribed_at`、从开盘到收盘不超过 60 秒间隔的 monitor heartbeat，以及非负 JSON 整数 `dropped_callback_count`。经 Beast 转换后，证据同时保留 `source_events_sha256` 指向输入 export，并以 `events_sha256` 指向规范 artifact；SmartCash 会把前者与 lineage manifest 的 `vault.export_sha256` 交叉核对。午休不计 heartbeat gap。缺文件、哈希不匹配、缺股票、首尾不覆盖、乱序、gap 超限或丢包非零都会令该股票失败。
 
 执行：
 
@@ -207,7 +207,7 @@ PYTHONPATH=src /opt/conda/envs/research/bin/python -m smartcash.cli \
 
 Phase 0 对逐笔和 L2 分别检查 exchange event time、`captured_at` 覆盖、负延迟、回调乱序和过期到达；逐笔另查 sequence、重复 trade ID 与独立整日 capture envelope，L2 另查 crossed/locked、首尾和连续 gap。L2 最大 gap 与 callback 延迟阈值只能收紧，分别不能放宽到 5 秒和 1,000 毫秒以上。交易时段按冻结的 2025–2026 HKEX 开市日、休市日与半日市表校验，且时间戳必须为香港 `+08:00`；普通日为 09:30–12:00、13:00–16:00，半日市为 09:30–12:00。12:00–13:00 午休不计 gap。
 
-历史因子 replay 必须同时满足四道硬门：与事件 JSONL 哈希一致的 Vault/Beast lineage manifest、独立逐笔 capture evidence、独立方向核验 JSON（匹配的 `direction_convention`、`verified=true`、带时区 `verified_at` 和非空 `evidence`），以及 `--coverage-complete` 声明下所有预期股票均通过验收。任一道不通过都不会生成 feature 或未来 label；此时只能用 `--quality-only` 生成 Phase 0 质量报告。
+历史因子 replay 必须同时满足四道硬门：与事件 JSONL 哈希一致、并记录实际 `vault.export_sha256` 与 `captured_at_sources` 的 Vault/Beast lineage manifest；带 source→derived 双哈希链的独立逐笔 capture evidence；独立方向核验 JSON（匹配的 `direction_convention`、`verified=true`、带时区 `verified_at` 和非空 `evidence`）；以及 `--coverage-complete` 声明下所有预期股票均通过验收。任一道不通过都不会生成 feature 或未来 label；此时只能用 `--quality-only` 生成 Phase 0 质量报告。
 
 `--output-dir` 必须不存在或为空；每次运行使用独立目录。CLI 不会让本次失败/quality-only 的质量报告与上一次成功运行留下的 feature、label 或 shock 文件混在一起。
 

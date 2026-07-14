@@ -25,6 +25,14 @@ def _seat_code(value: object) -> str:
     return "" if number <= 0 else str(number).zfill(4)
 
 
+def _raw_value(raw: Mapping[str, Any], *names: str) -> object:
+    for name in names:
+        value = raw.get(name)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _event_ts(value: object) -> datetime:
     try:
         timestamp_ms = float(value)
@@ -56,6 +64,7 @@ def normalize_hktransaction(
     volume = int(raw.get("volume", raw.get("Volume", 0)))
     turnover_value = raw.get("turnover", raw.get("Turnover"))
     turnover = float(turnover_value) if turnover_value is not None else price * volume
+    trade_id_value = _raw_value(raw, "tradeID", "TradeID", "seq", "Seq")
     return TradeEvent(
         symbol=symbol,
         event_ts=_event_ts(raw.get("time", raw.get("Time"))),
@@ -63,9 +72,9 @@ def normalize_hktransaction(
         volume=volume,
         turnover=turnover,
         aggressor_side=_side(raw.get("dir", raw.get("Dir")), convention),
-        active_seat_code=_seat_code(raw.get("activeBrokerNo")),
-        passive_seat_code=_seat_code(raw.get("brokerNo")),
-        trade_id=str(raw.get("tradeID", raw.get("seq", ""))),
+        active_seat_code=_seat_code(_raw_value(raw, "activeBrokerNo", "ActiveBrokerNo")),
+        passive_seat_code=_seat_code(_raw_value(raw, "brokerNo", "BrokerNo")),
+        trade_id="" if trade_id_value is None else str(trade_id_value),
         side_contract=convention.value,
         captured_at=captured_at,
     )

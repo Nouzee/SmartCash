@@ -77,6 +77,7 @@ def load_events(
     convention: DirectionConvention,
     *,
     max_arrival_latency_ms: float = 1_000.0,
+    observed_captured_at_sources: set[str] | None = None,
 ) -> tuple[list[MarketEvent], TapeAudit, BookInputAudit]:
     events = []
     tape_auditor = TapeAuditor(max_arrival_latency_ms=max_arrival_latency_ms)
@@ -86,6 +87,13 @@ def load_events(
             if not line.strip():
                 continue
             row: dict[str, Any] = json.loads(line)
+            if observed_captured_at_sources is not None:
+                raw_captured_at_source = row.get("captured_at_source")
+                observed_captured_at_sources.add(
+                    raw_captured_at_source.strip()
+                    if isinstance(raw_captured_at_source, str)
+                    else ""
+                )
             kind = str(row.get("kind", ""))
             symbol = str(row.get("symbol", ""))
             payload = row.get("payload", row)
@@ -102,7 +110,7 @@ def load_events(
                 )
                 tape_auditor.record(
                     event,
-                    raw_sequence=payload.get("seq"),
+                    raw_sequence=payload.get("seq", payload.get("Seq")),
                     captured_at=captured_at,
                 )
                 events.append(event)
@@ -147,6 +155,7 @@ def load_trade_capture_evidence(
     expected_end: datetime,
     expected_symbols: tuple[str, ...],
     events_sha256: str,
+    source_events_sha256: str | None = None,
 ) -> TradeCaptureAudit:
     with path.open(encoding="utf-8") as handle:
         payload = json.load(handle)
@@ -154,6 +163,11 @@ def load_trade_capture_evidence(
         raise ValueError("trade capture evidence date does not match expected_open")
     if payload.get("events_sha256") != events_sha256:
         raise ValueError("trade capture evidence is not bound to this events file")
+    if (
+        source_events_sha256 is not None
+        and payload.get("source_events_sha256") != source_events_sha256
+    ):
+        raise ValueError("trade capture evidence is not bound to the manifest source export")
     raw_symbols = payload.get("symbols")
     if not isinstance(raw_symbols, dict):
         raise ValueError("trade capture evidence symbols must be an object")
@@ -309,11 +323,15 @@ def main() -> None:
         if args.vault_beast_manifest is not None
         else None
     )
+    observed_captured_at_sources: set[str] = set()
     events, tape_audit, book_input_audit = load_events(
         args.events_jsonl,
         direction_convention,
         max_arrival_latency_ms=args.max_arrival_latency_ms,
+        observed_captured_at_sources=observed_captured_at_sources,
     )
+    if vault_beast_manifest is not None:
+        vault_beast_manifest.validate_captured_at_sources(observed_captured_at_sources)
     if _sha256_file(args.events_jsonl) != events_sha256:
         raise ValueError("events file changed while it was being audited")
     session_start = datetime.fromisoformat(args.session_start)
@@ -326,6 +344,11 @@ def main() -> None:
             expected_end=expected_end,
             expected_symbols=tuple(args.expected_symbol),
             events_sha256=events_sha256,
+            source_events_sha256=(
+                vault_beast_manifest.vault.export_sha256
+                if vault_beast_manifest is not None
+                else None
+            ),
         )
         if args.trade_capture_evidence_file is not None
         else TradeCaptureAudit(())

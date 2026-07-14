@@ -20,6 +20,7 @@ def test_vault_beast_manifest_preserves_causal_source_provenance() -> None:
             dataset_id="hk-l2-20260713",
             version="v3",
             content_sha256=SHA_A,
+            export_sha256=SHA_B,
         ),
         beast=BeastTransformRef(
             script="beast_tools.smartcash.build_events",
@@ -31,26 +32,37 @@ def test_vault_beast_manifest_preserves_causal_source_provenance() -> None:
         preserves_event_ts=True,
         preserves_captured_at=True,
         broker_queue_used=False,
+        captured_at_sources=("xtquant_callback",),
     )
 
     payload = manifest.to_dict()
 
     assert payload["schema_version"] == VAULT_BEAST_MANIFEST_SCHEMA_VERSION
     assert payload["vault"]["dataset_id"] == "hk-l2-20260713"
+    assert payload["vault"]["export_sha256"] == SHA_B
     assert payload["beast"]["script"] == "beast_tools.smartcash.build_events"
     assert payload["source_kinds"] == ["hktransaction", "l2thousand"]
     assert payload["broker_queue_used"] is False
 
+    manifest.validate_captured_at_sources({"xtquant_callback"})
+    try:
+        manifest.validate_captured_at_sources({"vault_file_mtime_ns"})
+    except ValueError as error:
+        assert "captured_at_source" in str(error)
+    else:
+        raise AssertionError("manifest arrival provenance must match the event rows")
+
 
 def test_vault_beast_manifest_fails_closed_when_causality_is_not_proven() -> None:
     base = {
-        "vault": VaultDatasetRef("dataset", "v1", SHA_A),
+        "vault": VaultDatasetRef("dataset", "v1", SHA_A, SHA_B),
         "beast": BeastTransformRef("beast.transform", "1" * 40, SHA_B),
         "artifact_sha256": SHA_C,
         "source_kinds": ("hktransaction", "l2thousand"),
         "preserves_event_ts": True,
         "preserves_captured_at": True,
         "broker_queue_used": False,
+        "captured_at_sources": ("xtquant_callback",),
     }
 
     for override in (
@@ -78,13 +90,14 @@ def test_beast_transform_requires_an_immutable_full_commit_digest() -> None:
 def test_manifest_loader_hash_binds_the_beast_artifact(tmp_path) -> None:
     path = tmp_path / "vault-beast-manifest.json"
     payload = VaultBeastArtifactManifest(
-        vault=VaultDatasetRef("dataset", "v1", SHA_A),
+        vault=VaultDatasetRef("dataset", "v1", SHA_A, SHA_B),
         beast=BeastTransformRef("beast.transform", "1" * 40, SHA_B),
         artifact_sha256=SHA_C,
         source_kinds=("hktransaction", "l2thousand"),
         preserves_event_ts=True,
         preserves_captured_at=True,
         broker_queue_used=False,
+        captured_at_sources=("xtquant_callback",),
     ).to_dict()
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -97,3 +110,31 @@ def test_manifest_loader_hash_binds_the_beast_artifact(tmp_path) -> None:
         assert "hash" in str(error)
     else:
         raise AssertionError("lineage must be bound to the exact replay artifact")
+
+
+def test_manifest_loader_requires_export_and_arrival_provenance(tmp_path) -> None:
+    base = VaultBeastArtifactManifest(
+        vault=VaultDatasetRef("dataset", "v1", SHA_A, SHA_B),
+        beast=BeastTransformRef("beast.transform", "1" * 40, SHA_B),
+        artifact_sha256=SHA_C,
+        source_kinds=("hktransaction", "l2thousand"),
+        preserves_event_ts=True,
+        preserves_captured_at=True,
+        broker_queue_used=False,
+        captured_at_sources=("xtquant_callback",),
+    ).to_dict()
+    for missing_field in ("export_sha256", "captured_at_sources"):
+        payload = json.loads(json.dumps(base))
+        if missing_field == "export_sha256":
+            payload["vault"].pop(missing_field)
+        else:
+            payload.pop(missing_field)
+        path = tmp_path / f"missing-{missing_field}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        try:
+            load_vault_beast_manifest(path, expected_artifact_sha256=SHA_C)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"manifest must require {missing_field}")

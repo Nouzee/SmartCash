@@ -64,6 +64,25 @@ def test_tape_audit_detects_file_order_duplicates_and_sequence_gaps(tmp_path) ->
     assert not audit.tape_complete
 
 
+def test_vault_pascal_case_sequence_is_audited(tmp_path) -> None:
+    path = tmp_path / "events.jsonl"
+    rows = []
+    for sequence, timestamp_ms in ((41, 1_767_576_601_000), (42, 1_767_576_602_000)):
+        row = trade(sequence, timestamp_ms, str(sequence))
+        payload = row["payload"]
+        assert isinstance(payload, dict)
+        payload["Seq"] = payload.pop("seq")
+        payload["TradeID"] = payload.pop("tradeID")
+        rows.append(row)
+    write_jsonl(path, rows)
+
+    _events, audit, _book_audit = load_events(path, DirectionConvention.VENDOR_DOC)
+
+    assert audit.sequence_present
+    assert audit.sequence_gap_count == 0
+    assert audit.duplicate_trade_id_count == 0
+
+
 def test_generic_tick_alias_is_rejected_instead_of_relabelled_as_xtquant(tmp_path) -> None:
     path = tmp_path / "events.jsonl"
     row = trade(1, 1_767_576_601_000, "1")
@@ -359,6 +378,32 @@ def test_trade_capture_evidence_requires_full_heartbeat_envelope(tmp_path) -> No
     assert symbol_audit is not None
     assert symbol_audit.max_heartbeat_gap_seconds > 60.0
     assert not symbol_audit.capture_complete
+
+
+def test_trade_capture_evidence_must_link_to_manifest_source_export(tmp_path) -> None:
+    path = tmp_path / "capture-evidence.json"
+    path.write_text(
+        json.dumps(
+            {
+                "source": "xtquant.hktransaction",
+                "trade_date": "2026-01-05",
+                "events_sha256": "a" * 64,
+                "source_events_sha256": "b" * 64,
+                "symbols": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="source export"):
+        load_trade_capture_evidence(
+            path,
+            expected_open=datetime.fromisoformat("2026-01-05T09:30:00+08:00"),
+            expected_end=datetime.fromisoformat("2026-01-05T16:00:00+08:00"),
+            expected_symbols=(),
+            events_sha256="a" * 64,
+            source_events_sha256="c" * 64,
+        )
 
 
 def test_trade_capture_evidence_accepts_full_active_session_heartbeats(tmp_path) -> None:

@@ -51,16 +51,16 @@ The smaller eligible set now also requires a complete 300-second warm-up. The ta
 
 1. The XTQuant direction description and current Thousand exporter disagree. Resolve against an independent source before using signed flow.
 2. Thousand currently defaults to `hktransaction` and broker queue, not historical `l2thousand`; full-depth persistence is required.
-3. `activeBrokerNo` coverage must be measured. Passive broker fallback would invalidate identity flow.
+3. `activeBrokerNo` coverage is only 0.0267% of directional turnover in the first Vault sample. The static Mammoth broker map covers the sole disclosed seat but still needs as-of versioning; passive broker fallback remains forbidden.
 4. Snapshot-derived refill is only a proxy. True cancellation/addition requires `hkorder` or a reliable incremental order-book feed.
 5. Broker skill must be trained on earlier matured markouts with shrinkage and as-of versioning.
 6. Protected IOC displayed-book fills now exist, but point-in-time fees, latency scenarios, unobserved impact stress and a portfolio ledger remain absent. Markout is still not net strategy PnL.
 
-Phase 0 inventory on 2026-07-13 found no admissible persisted Hong Kong `hktransaction + l2thousand` dataset in the workspace. Thousand's default live period set also omits `l2thousand`; see [the data acceptance report](phase-00-data-acceptance-2026-07-13.md).
+A corrected inventory on 2026-07-14 found persisted Hong Kong `hktransaction + l2thousand` under `/vault/core/data/Octopus-Live`. The first 2026-01-08 `00700.HK` quality-only replay failed the capture, sequence, L2-gap, direction and identity gates, so the data is available but not yet admissible for factor or alpha claims; see [the data acceptance report](phase-00-data-acceptance-2026-07-13.md) and [the run report](phase-02-vault-quality-2026-01-08-00700.md).
 
 ## Framework decision
 
-- Vault is the authoritative versioned research-data source; a concrete environment mount/API still needs to be supplied.
+- Vault is the authoritative versioned research-data source; the environment mount is `/vault/core/data`.
 - Beast owns the reproducible Vault-to-SmartCash transform scripts. SmartCash now validates their dataset/script/config/artifact lineage contract rather than importing Beast internals.
 - This project is the tick/L2 feature and label layer.
 - SmartCash now writes versioned, hash-bound dual-plane Parquet sidecars and public Lemnis order-batch payloads. Lemnis may provide scheduling, order lifecycle, risk, ledger and replay, while SmartCash remains the L2 execution authority. Local public-object materialization is not yet environment-verified because the Lemnis checkout's declared `polars` dependency is absent.

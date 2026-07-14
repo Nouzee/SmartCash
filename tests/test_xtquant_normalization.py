@@ -44,6 +44,43 @@ def test_missing_active_broker_never_falls_back_to_passive_broker() -> None:
     assert trade.passive_seat_code == "0101"
 
 
+def test_vault_pascal_case_trade_fields_are_preserved() -> None:
+    trade = normalize_hktransaction(
+        symbol="00700.HK",
+        raw={
+            "Time": 1_767_576_601_000,
+            "Price": 400.0,
+            "Volume": 100,
+            "Dir": 2,
+            "BrokerNo": 9999,
+            "ActiveBrokerNo": 101,
+            "TradeID": 7,
+            "Seq": 42,
+        },
+        convention=DirectionConvention.VENDOR_DOC,
+    )
+
+    assert trade.active_seat_code == "0101"
+    assert trade.passive_seat_code == "9999"
+    assert trade.trade_id == "7"
+
+
+def test_zero_trade_id_is_not_treated_as_missing() -> None:
+    trade = normalize_hktransaction(
+        symbol="00700.HK",
+        raw={
+            "Time": 1_767_576_601_000,
+            "Price": 400.0,
+            "Volume": 100,
+            "Dir": 2,
+            "TradeID": 0,
+        },
+        convention=DirectionConvention.VENDOR_DOC,
+    )
+
+    assert trade.trade_id == "0"
+
+
 def test_normalized_trade_preserves_causal_arrival_time() -> None:
     captured_at = datetime.fromisoformat("2026-01-05T09:30:01.125+08:00")
 
